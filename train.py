@@ -1,45 +1,44 @@
-import torch
-import torch.nn as nn
-import torch.optim as optim
+import tensorflow as tf
 from model import MultimodalVQAModel
-from data_preprocessing import get_data_loader
+from data_preprocessing import get_tf_dataset
 from sklearn.metrics import mean_squared_error
 import numpy as np
 
-def train_model(model, train_loader, val_loader, epochs=10, lr=1e-4):
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model.to(device)
-    optimizer = optim.Adam(model.parameters(), lr=lr)
-    criterion = nn.MSELoss()  # For regression
+def train_model(model, train_dataset, val_dataset, epochs=10, lr=1e-4):
+    optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
+    loss_fn = tf.keras.losses.MeanSquaredError()
+
+    @tf.function
+    def train_step(inputs, labels):
+        with tf.GradientTape() as tape:
+            segment_scores, global_scores = model(inputs)
+            loss = loss_fn(global_scores, labels) + 0.5 * loss_fn(tf.reduce_mean(segment_scores, axis=1), labels)
+        gradients = tape.gradient(loss, model.trainable_variables)
+        optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+        return loss
 
     for epoch in range(epochs):
-        model.train()
         train_loss = 0
-        for frames, audio, texts, masks, labels in train_loader:
-            frames, audio, texts, masks, labels = frames.to(device), audio.to(device), texts.to(device), masks.to(device), labels.to(device)
-
-            optimizer.zero_grad()
-            segment_scores, global_scores = model(frames, audio, texts, masks)
-            loss = criterion(global_scores.squeeze(), labels) + 0.5 * criterion(segment_scores.mean(dim=1).squeeze(), labels)  # Weighted loss
-            loss.backward()
-            optimizer.step()
-            train_loss += loss.item()
+        for batch in train_dataset:
+            frames, audio, texts, masks, labels = batch
+            inputs = [frames, audio, texts, masks]
+            loss = train_step(inputs, labels)
+            train_loss += loss.numpy()
 
         # Validation
-        model.eval()
         val_preds = []
         val_labels = []
-        with torch.no_grad():
-            for frames, audio, texts, masks, labels in val_loader:
-                frames, audio, texts, masks, labels = frames.to(device), audio.to(device), texts.to(device), masks.to(device), labels.to(device)
-                _, global_scores = model(frames, audio, texts, masks)
-                val_preds.extend(global_scores.squeeze().cpu().numpy())
-                val_labels.extend(labels.cpu().numpy())
+        for batch in val_dataset:
+            frames, audio, texts, masks, labels = batch
+            inputs = [frames, audio, texts, masks]
+            _, global_scores = model(inputs)
+            val_preds.extend(global_scores.numpy().flatten())
+            val_labels.extend(labels.numpy().flatten())
 
         val_mse = mean_squared_error(val_labels, val_preds)
-        print(f"Epoch {epoch+1}, Train Loss: {train_loss/len(train_loader):.4f}, Val MSE: {val_mse:.4f}")
+        print(f"Epoch {epoch+1}, Train Loss: {train_loss/len(train_dataset):.4f}, Val MSE: {val_mse:.4f}")
 
-    torch.save(model.state_dict(), 'multimodal_vqa_model.pth')
+    model.save_weights('multimodal_vqa_model.h5')
 
 if __name__ == "__main__":
     # Dummy data
@@ -48,8 +47,8 @@ if __name__ == "__main__":
     text_data = [["dummy text"] * 10] * 10
     labels = np.random.rand(10)
 
-    train_loader = get_data_loader(video_paths[:8], audio_paths[:8], text_data[:8], labels[:8])
-    val_loader = get_data_loader(video_paths[8:], audio_paths[8:], text_data[8:], labels[8:])
+    train_dataset = get_tf_dataset(video_paths[:8], audio_paths[:8], text_data[:8], labels[:8])
+    val_dataset = get_tf_dataset(video_paths[8:], audio_paths[8:], text_data[8:], labels[8:])
 
     model = MultimodalVQAModel()
-    train_model(model, train_loader, val_loader)
+    train_model(model, train_dataset, val_dataset)

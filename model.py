@@ -1,78 +1,74 @@
-import torch
-import torch.nn as nn
-from transformers import ViTModel, RobertaModel, RobertaTokenizer
-import timm
+import tensorflow as tf
+from transformers import TFAutoModel
 import librosa
 import numpy as np
 
-class PANNs(nn.Module):
+class PANNs(tf.keras.layers.Layer):
     """
     Simplified PANNs model for audio feature extraction.
-    In practice, load from a pretrained checkpoint.
     """
-    def __init__(self, input_dim=128, hidden_dim=2048, output_dim=2048):
+    def __init__(self, output_dim=512):
         super(PANNs, self).__init__()
-        self.conv1 = nn.Conv2d(1, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
-        self.pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Linear(64, output_dim)
+        self.conv1 = tf.keras.layers.Conv2D(64, kernel_size=(3, 3), strides=(1, 1), padding='same')
+        self.pool = tf.keras.layers.GlobalAveragePooling2D()
+        self.fc = tf.keras.layers.Dense(output_dim)
 
-    def forward(self, x):
-        # x: (batch, time, freq) -> (batch, 1, time, freq)
-        x = x.unsqueeze(1)
-        x = torch.relu(self.conv1(x))
-        x = self.pool(x).squeeze(-1).squeeze(-1)
+    def call(self, x):
+        # x: (batch, time, freq) -> (batch, time, freq, 1)
+        x = tf.expand_dims(x, axis=-1)
+        x = tf.nn.relu(self.conv1(x))
+        x = self.pool(x)
         x = self.fc(x)
         return x
 
-class MultimodalVQAModel(nn.Module):
-    def __init__(self, num_classes=1, segment_length=10, frame_rate=1):
+class MultimodalVQAModel(tf.keras.Model):
+    def __init__(self, num_classes=1, segment_length=10):
         super(MultimodalVQAModel, self).__init__()
         # ViT for visual features
-        self.vit = ViTModel.from_pretrained('google/vit-base-patch16-224')
-        self.vit_fc = nn.Linear(768, 512)  # Reduce dim
+        self.vit = TFAutoModel.from_pretrained('google/vit-base-patch16-224')
+        self.vit_fc = tf.keras.layers.Dense(512)  # Reduce dim
 
         # PANNs for audio features
         self.panns = PANNs(output_dim=512)
 
         # RoBERTa for text features
-        self.roberta = RobertaModel.from_pretrained('hfl/roberta-wwm-ext')
-        self.roberta_fc = nn.Linear(768, 512)
+        self.roberta = TFAutoModel.from_pretrained('hfl/roberta-wwm-ext')
+        self.roberta_fc = tf.keras.layers.Dense(512)
 
         # Fusion layers
-        self.fusion = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(d_model=512*3, nhead=8, dim_feedforward=2048),
-            num_layers=2
-        )
-        self.segment_pool = nn.AdaptiveAvgPool1d(segment_length)
-        self.global_pool = nn.AdaptiveAvgPool1d(1)
+        self.fusion = tf.keras.layers.MultiHeadAttention(num_heads=8, key_dim=512*3)
+        self.segment_pool = tf.keras.layers.GlobalAveragePooling1D()
+        self.global_pool = tf.keras.layers.GlobalAveragePooling1D()
 
         # Output heads
-        self.segment_head = nn.Linear(512*3, num_classes)  # Segment-level scores
-        self.global_head = nn.Linear(512*3, num_classes)   # Global score
+        self.segment_head = tf.keras.layers.Dense(num_classes)  # Segment-level scores
+        self.global_head = tf.keras.layers.Dense(num_classes)   # Global score
 
-    def forward(self, frames, audio, texts, attention_mask=None):
-        """
-        frames: (batch, seq_len, 3, 224, 224) - video frames
-        audio: (batch, seq_len, freq_bins) - audio spectrograms
-        texts: (batch, seq_len, max_len) - tokenized texts (e.g., danmu)
-        """
-        batch_size, seq_len = frames.shape[0], frames.shape[1]
+    def call(self, inputs):
+        frames, audio, texts, attention_mask = inputs
+        # frames: (batch, seq_len, 224, 224, 3)
+        # audio: (batch, seq_len, freq_bins)
+        # texts: (batch, seq_len, max_len)
+        # attention_mask: (batch, seq_len, max_len)
+
+        batch_size = tf.shape(frames)[0]
+        seq_len = tf.shape(frames)[1]
 
         # Visual features
         vis_features = []
         for i in range(seq_len):
-            frame = frames[:, i]  # (batch, 3, 224, 224)
+            frame = frames[:, i]  # (batch, 224, 224, 3)
             vit_out = self.vit(frame).last_hidden_state[:, 0]  # CLS token
             vis_features.append(self.vit_fc(vit_out))
-        vis_features = torch.stack(vis_features, dim=1)  # (batch, seq_len, 512)
+        vis_features = tf.stack(vis_features, axis=1)  # (batch, seq_len, 512)
 
         # Audio features
         audio_features = []
         for i in range(seq_len):
             aud = audio[:, i]  # (batch, freq_bins)
-            panns_out = self.panns(aud.unsqueeze(1))  # Adjust input
+            panns_out = self.panns(tf.expand_dims(aud, axis=1))  # Adjust input
             audio_features.append(panns_out)
-        audio_features = torch.stack(audio_features, dim=1)  # (batch, seq_len, 512)
+        audio_features = tf.stack(audio_features, axis=1)  # (batch, seq_len, 512)
 
         # Text features
         text_features = []
@@ -81,19 +77,19 @@ class MultimodalVQAModel(nn.Module):
             mask = attention_mask[:, i] if attention_mask is not None else None
             roberta_out = self.roberta(txt, attention_mask=mask).last_hidden_state[:, 0]
             text_features.append(self.roberta_fc(roberta_out))
-        text_features = torch.stack(text_features, dim=1)  # (batch, seq_len, 512)
+        text_features = tf.stack(text_features, axis=1)  # (batch, seq_len, 512)
 
         # Concatenate modalities
-        combined = torch.cat([vis_features, audio_features, text_features], dim=-1)  # (batch, seq_len, 1536)
+        combined = tf.concat([vis_features, audio_features, text_features], axis=-1)  # (batch, seq_len, 1536)
 
-        # Fusion
-        fused = self.fusion(combined.transpose(0, 1)).transpose(0, 1)  # (batch, seq_len, 1536)
+        # Fusion (simplified: use self-attention)
+        fused = self.fusion(combined, combined)  # (batch, seq_len, 1536)
 
         # Segment-level output
         segment_scores = self.segment_head(fused)  # (batch, seq_len, num_classes)
 
         # Global output
-        global_feat = self.global_pool(fused.transpose(1, 2)).squeeze(-1)  # (batch, 1536)
+        global_feat = self.global_pool(fused)  # (batch, 1536)
         global_score = self.global_head(global_feat)  # (batch, num_classes)
 
         return segment_scores, global_score
@@ -102,9 +98,10 @@ class MultimodalVQAModel(nn.Module):
 if __name__ == "__main__":
     model = MultimodalVQAModel()
     # Dummy inputs
-    frames = torch.randn(2, 10, 3, 224, 224)  # batch=2, seq=10 frames
-    audio = torch.randn(2, 10, 128)  # spectrograms
-    texts = torch.randint(0, 1000, (2, 10, 50))  # tokenized texts
-    segment_out, global_out = model(frames, audio, texts)
+    frames = tf.random.normal((2, 10, 224, 224, 3))  # batch=2, seq=10 frames
+    audio = tf.random.normal((2, 10, 128))  # spectrograms
+    texts = tf.random.uniform((2, 10, 50), 0, 1000, dtype=tf.int32)  # tokenized texts
+    masks = tf.ones((2, 10, 50), dtype=tf.int32)
+    segment_out, global_out = model([frames, audio, texts, masks])
     print("Segment scores shape:", segment_out.shape)  # (2, 10, 1)
     print("Global score shape:", global_out.shape)     # (2, 1)

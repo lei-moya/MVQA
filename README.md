@@ -4,7 +4,7 @@
 
 ## 代码使用说明
 
-本项目使用ViT + PANNs + RoBERTa搭建多模态短视频质量评估模型。
+本项目使用TensorFlow框架搭建ViT + PANNs + RoBERTa多模态短视频质量评估模型。
 
 ### 安装依赖
 ```bash

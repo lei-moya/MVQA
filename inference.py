@@ -1,31 +1,27 @@
-import torch
+import tensorflow as tf
 from model import MultimodalVQAModel
 from data_preprocessing import MultimodalDataset
 import matplotlib.pyplot as plt
 
 def inference(model_path, video_path, audio_path, text_data):
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = MultimodalVQAModel()
-    model.load_state_dict(torch.load(model_path))
-    model.to(device)
-    model.eval()
+    model.load_weights(model_path)
 
     # Create dataset for single sample
     dataset = MultimodalDataset([video_path], [audio_path], [text_data], [0])  # Dummy label
     frames, audio, texts, masks, _ = dataset[0]
-    frames = frames.unsqueeze(0).to(device)
-    audio = audio.unsqueeze(0).to(device)
-    texts = texts.unsqueeze(0).to(device)
-    masks = masks.unsqueeze(0).to(device)
+    frames = tf.expand_dims(frames, axis=0)
+    audio = tf.expand_dims(audio, axis=0)
+    texts = tf.expand_dims(texts, axis=0)
+    masks = tf.expand_dims(masks, axis=0)
 
-    with torch.no_grad():
-        segment_scores, global_score = model(frames, audio, texts, masks)
+    segment_scores, global_score = model([frames, audio, texts, masks])
 
-    print(f"Global Quality Score: {global_score.item():.4f}")
-    print(f"Segment Scores: {segment_scores.squeeze().cpu().numpy()}")
+    print(f"Global Quality Score: {global_score.numpy()[0][0]:.4f}")
+    print(f"Segment Scores: {segment_scores.numpy()[0].flatten()}")
 
     # Plot segment scores
-    plt.plot(segment_scores.squeeze().cpu().numpy())
+    plt.plot(segment_scores.numpy()[0].flatten())
     plt.title("Segment-Level Quality Scores")
     plt.xlabel("Segment")
     plt.ylabel("Score")
@@ -33,4 +29,4 @@ def inference(model_path, video_path, audio_path, text_data):
 
 if __name__ == "__main__":
     # Example
-    inference('multimodal_vqa_model.pth', 'path/to/video', 'path/to/audio.wav', ['弹幕1', '弹幕2'])
+    inference('multimodal_vqa_model.h5', 'path/to/video', 'path/to/audio.wav', ['弹幕1', '弹幕2'])

@@ -1,7 +1,6 @@
-torch>=2.0.0
-torchvision>=0.15.0
-transformers>=4.21.0
-timm>=0.6.0
+tensorflow>=2.10.0
+transformers[tf]>=4.21.0
+tokenizers==0.13.3
 librosa>=0.10.0
 numpy>=1.21.0
 pandas>=1.5.0
