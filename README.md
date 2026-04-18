@@ -25,6 +25,25 @@
 | **认证与权限** | B 站扫码相关流程、JWT、管理员 mid 与环境变量合并（`settings` · `admin_mids_store`） |
 | **配置与合规** | 用户级 `Setting`、敏感词 DFA/规则（`utils/sensitive_rules`）、可选 S3 流式重定向（`storage`） |
 | **前端体验** | Vue 3 + Vite + Element Plus + ECharts，开发时代理 `/api` 与 `/uploads` |
+| **帮助中心** | 内置 `/help` 多标签文档（产品介绍、操作说明、FAQ、部署、术语等），见下节 |
+
+---
+
+## 帮助中心
+
+前端提供独立 **帮助页**，路由为 **`/help`**（实现见 [`frontend/src/components/Help.vue`](frontend/src/components/Help.vue)）。**无需登录**即可打开；顶栏菜单「帮助」进入。设置页 `/settings` 仍受登录守卫保护。
+
+| 标签 | 内容概要 |
+|------|----------|
+| **项目介绍** | 产品定位、技术栈摘要、适用场景与使用边界（模型主观性、浏览器播放与分析差异、S3 与本地分析等） |
+| **功能说明** | 首页布局、登录与导航、上传/批量/B 站 URL 规则与限额、任务状态含义、列表筛选与分页、大屏折线/雷达/弹幕/流媒体、`/api/health` 等 |
+| **使用指南** | 首次使用推荐步骤、JWT 与 401、上传与列表操作、查看结果与重分析、设置与敏感词权限说明 |
+| **常见问题** | 处理耗时、失败排查、格式与黑屏、弹幕、筛选与管理员 mid、`JWT_SECRET`、B 站 URL、代理与 `VITE_*` 等 |
+| **术语与提示** | mid、JWT、BackgroundTasks、预签名 URL、片段（clip）；调试与隐私/数据落盘提示 |
+| **部署与环境** | Python/Node 建议版本、本地 `uvicorn` + `npm run dev`、生产构建与反代、环境变量摘要、`video_rating.db` / `backend/uploads`、启动检查清单 |
+| **技术支持** | 自助排查步骤与联系方式占位（可在该 Vue 文件中替换为课题组建群、邮箱或 Issue 链接） |
+
+开发或交付时，**以应用内帮助页为准**；README 仅作入口说明。更新文案时直接改 `Help.vue` 即可。
 
 ---
 
@@ -61,6 +80,12 @@
   <img src="docs/images/05-login.png" alt="登录" width="85%" />
 </p>
 <p align="center"><sub>文件：<code>docs/images/05-login.png</code></sub></p>
+
+<p align="center">
+  <b>帮助中心（/help）</b><br/>
+  <img src="docs/images/06-help.png" alt="帮助中心" width="85%" />
+</p>
+<p align="center"><sub>文件：<code>docs/images/06-help.png</code></sub></p>
 
 ---
 

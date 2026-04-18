@@ -277,7 +277,7 @@
             <div class="help-section">
               <h4>环境要求（经验值）</h4>
               <ul>
-                <li><strong>Python</strong>：建议 3.10+；创建 venv 后 <code>pip install -r backend/requirements.txt</code></li>
+                <li><strong>Python</strong>：建议 3.9+；创建 venv 后 <code>pip install -r backend/requirements.txt</code></li>
                 <li><strong>Node.js</strong>：建议 18+；在 <code>frontend</code> 执行 <code>npm install</code></li>
                 <li><strong>硬件</strong>：分析阶段占用 GPU/CPU 与内存显著；演示机建议独立显卡与 16GB+ 内存</li>
               </ul>
