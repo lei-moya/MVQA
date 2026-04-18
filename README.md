@@ -254,4 +254,4 @@ SQLite 默认在容器内 ` /app/video_rating.db`；若需持久化，见 `docke
 
 ## 许可证
 
-未随仓库提供 `LICENSE` 文件时，默认 **All Rights Reserved**；未经作者同意，不得使用该仓库代码，作者保留该作品的所有权利。
+未随仓库提供 `LICENSE` 文件时，默认 **All Rights Reserved**；未经作者同意，不得随意克隆该仓库代码，作者保留该作品的所有权利。
