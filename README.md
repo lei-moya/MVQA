@@ -175,8 +175,17 @@ SQLite 默认在容器内 ` /app/video_rating.db`；若需持久化，见 `docke
 ├── frontend/          # Vue 3 前端
 ├── docs/images/       # README 配图（按需添加）
 ├── docker-compose.yml
-└── README.md
+├── README.md
+├── 基于多模态融合的短视频质量评价系统的设计与实现.pdf
+└── 多模态视频质量评价系统研究.pptx
 ```
+
+---
+
+## 设计文档
+
+- [《基于多模态融合的短视频质量评价系统的设计与实现》（PDF）](./基于多模态融合的短视频质量评价系统的设计与实现.pdf)
+- [《多模态视频质量评价系统研究》（PPTX）](./多模态视频质量评价系统研究.pptx)
 
 ---
 
