@@ -127,7 +127,7 @@
           </div>
           <div class="about-item">
             <span class="about-label">作者:</span>
-            <span class="about-value">项目团队</span>
+            <span class="about-value">项目团队 Lei Moya</span>
           </div>
           <div class="about-item">
             <span class="about-label">技术栈:</span>
