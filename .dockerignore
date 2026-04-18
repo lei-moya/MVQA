@@ -1,0 +1,17 @@
+.git
+**/__pycache__
+**/*.pyc
+.venv
+venv
+env
+frontend/node_modules
+frontend/dist
+test_video
+backend/uploads
+*.db
+*.db-wal
+*.db-shm
+.videos
+videos
+.env
+.env.*

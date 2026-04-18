@@ -24,7 +24,7 @@
 import { ref, onMounted, onUnmounted } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Loading } from '@element-plus/icons-vue';
-import { getLoginQRCode, checkQRStatus } from '../api/index.js';
+import { getLoginQRCode, checkQRStatus, getApiErrorDetail } from '../api/index.js';
 
 const isLoggedIn = ref(false);
 const qrCode = ref('');
@@ -33,6 +33,9 @@ const loading = ref(false);
 const pollInterval = ref(null);
 const refreshInterval = ref(null);
 const timeLeft = ref(60); // 二维码有效期60秒
+/** 扫码轮询连续网络失败次数，短暂断网不反复弹窗 */
+let qrPollNetworkFailures = 0;
+const QR_POLL_NETWORK_FAIL_THRESHOLD = 3;
 
 // 触发登录成功事件
 const emit = defineEmits(['login-success']);
@@ -43,10 +46,11 @@ const getQRCode = async () => {
     const response = await getLoginQRCode();
     qrCode.value = response.data.qr_code;
     qrKey.value = response.data.qr_key;
+    qrPollNetworkFailures = 0;
     startPolling();
     startRefreshTimer();
   } catch (error) {
-    ElMessage.error('获取二维码失败');
+    ElMessage.error(`获取二维码失败: ${getApiErrorDetail(error)}`);
     console.error('获取二维码失败:', error);
   } finally {
     loading.value = false;
@@ -63,6 +67,7 @@ const startPolling = () => {
   pollInterval.value = setInterval(async () => {
     try {
       const response = await checkQRStatus(qrKey.value);
+      qrPollNetworkFailures = 0;
       if (response.data.status === 'success') {
         // 登录成功
         clearInterval(pollInterval.value);
@@ -89,20 +94,21 @@ const startPolling = () => {
         ElMessage.warning('二维码已过期，正在重新获取');
       } else if (response.data.code === 86101) {
         // 请扫描二维码
-        console.log('请扫描二维码...');
       } else if (response.data.code === 86090) {
         // 请在App中确认登录
-        console.log('请在B站App中确认登录');
       } else {
         // 其他状态
-        console.log('二维码状态:', response.data.code, response.data.message);
       }
     } catch (error) {
-      console.error('检查二维码状态失败:', error);
-      // 网络错误，重新获取二维码
+      qrPollNetworkFailures += 1;
+      console.warn('检查二维码状态失败:', error);
+      if (qrPollNetworkFailures < QR_POLL_NETWORK_FAIL_THRESHOLD) {
+        return;
+      }
+      qrPollNetworkFailures = 0;
       clearInterval(pollInterval.value);
       clearInterval(refreshInterval.value);
-      ElMessage.error('网络错误，请重新尝试');
+      ElMessage.error(getApiErrorDetail(error, '检查登录状态多次失败，已刷新二维码'));
       setTimeout(() => {
         getQRCode();
       }, 1000);
@@ -168,9 +174,10 @@ onUnmounted(() => {
 }
 
 .login-container {
-  background-color: white;
-  border-radius: 12px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  background-color: #ffffff;
+  border-radius: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  box-shadow: 0 24px 48px rgba(15, 23, 42, 0.16);
   padding: 30px;
   width: 400px;
   max-width: 90%;
@@ -253,11 +260,9 @@ onUnmounted(() => {
 @keyframes fadeIn {
   from {
     opacity: 0;
-    transform: translateY(-20px);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
   }
 }
 </style>

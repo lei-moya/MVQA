@@ -1,5 +1,17 @@
-# Logs
-logs
+# 依赖（Vue 3 + Vite 7，见 package.json）
+node_modules/
+
+# 构建产物（vite build 默认输出 dist）
+dist/
+dist-ssr/
+
+# 本地环境变量（vite.config.js 中 loadEnv(mode, process.cwd(), '')）
+.env
+.env.*
+!.env.example
+
+# 日志
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -7,18 +19,22 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
+# 仅本地覆盖的配置（Vite 常用）
 *.local
 
-# Editor directories and files
+# Vite 偶发在根目录生成的配置热更新临时文件
+*.timestamp-*
+
+# 编辑器（与仓库其余部分一致）
 .vscode/*
 !.vscode/extensions.json
-.idea
-.DS_Store
+.idea/
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+
+# 系统文件
+.DS_Store
+Thumbs.db

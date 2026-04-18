@@ -234,11 +234,9 @@ def merge_media(output_path, video_path, audio_path):
         '-strict', '-2', output_path
     ]
     
-    print("正在合并音视频...")
     result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8')
     if result.returncode != 0:
         raise Exception(f"合并失败: {result.stderr}")
-    print("合并完成")
 
 def download_video(url, output_dir='.', quality='auto', default_video_quality='80', audio_quality='high', default_audio_quality='high', session_token=None):
     """下载视频"""
@@ -251,31 +249,17 @@ def download_video(url, output_dir='.', quality='auto', default_video_quality='8
         
         # 提取BV号
         bvid = extract_bvid(url)
-        print(f"提取到BV号: {bvid}")
         
         # 获取视频信息
-        print("获取视频信息...")
         video_info = client.get_video_info(bvid)
         title = video_info['title']
-        owner = video_info['owner']['name']
         pages = video_info['pages']
-        
-        print(f"视频标题: {title}")
-        print(f"UP主: {owner}")
-        print(f"分P数量: {len(pages)}")
-        print(f"视频质量: {quality}")
-        print(f"默认视频质量: {default_video_quality}")
-        print(f"音频质量: {audio_quality}")
-        print(f"默认音频质量: {default_audio_quality}")
         
         # 遍历所有分P
         for page in pages:
             cid = page['cid']
-            page_title = page['part']
-            print(f"\n下载分P: {page_title}")
             
             # 获取播放信息
-            print("获取播放信息...")
             play_info = client.get_play_info(bvid, cid)
             
             if 'dash' not in play_info:
@@ -292,17 +276,12 @@ def download_video(url, output_dir='.', quality='auto', default_video_quality='8
             video_path = os.path.join(output_dir, f"{safe_title}.video")
             audio_path = os.path.join(output_dir, f"{safe_title}.audio")
             output_path = os.path.join(output_dir, f"{safe_title}.mp4")
-            danmaku_path = os.path.join(output_dir, f"{safe_title}.xml")
             
             # 下载视频和音频
-            print("下载视频...")
             download_file(client, video_url, video_path, "视频")
-            
-            print("下载音频...")
             download_file(client, audio_url, audio_path, "音频")
             
             # 下载弹幕并转换为ASS格式
-            print("下载弹幕...")
             danmaku_content = client.get_danmaku(cid)
             # 转换XML弹幕为ASS格式
             ass_content = convert_xml_to_ass(danmaku_content)
@@ -310,7 +289,6 @@ def download_video(url, output_dir='.', quality='auto', default_video_quality='8
             ass_path = os.path.join(output_dir, f"{safe_title}.ass")
             with open(ass_path, 'w', encoding='utf-8') as f:
                 f.write(ass_content)
-            print(f"弹幕已保存到: {ass_path}")
             
             # 合并音视频
             merge_media(output_path, video_path, audio_path)
@@ -318,10 +296,6 @@ def download_video(url, output_dir='.', quality='auto', default_video_quality='8
             # 删除临时文件
             os.remove(video_path)
             os.remove(audio_path)
-            
-            print(f"视频已保存到: {output_path}")
-        
-        print("\n所有分P下载完成！")
         
     except Exception as e:
         print(f"错误: {e}")

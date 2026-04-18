@@ -4,7 +4,7 @@
       <el-statistic
         :title="scoreTitle"
         :value="value"
-        :precision="2"
+        :precision="0"
         class="main-statistic"
       >
         <template #title>
@@ -108,8 +108,7 @@ const getStatusClass = (status) => {
 }
 
 .data-block-card:hover {
-  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-  transform: translateY(-2px);
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.09);
 }
 
 .data-content {

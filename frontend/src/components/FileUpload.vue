@@ -22,7 +22,8 @@
       <h3 class="section-title">
         <i class="fa-solid fa-file-upload"></i> 文件上传
         <div class="upload-tip">
-          仅支持mp4和ass
+          <span class="upload-tip-line">视频：mp4 / avi / mov / wmv / flv / mkv</span>
+          <span class="upload-tip-line">弹幕：ass / xml</span>
         </div>
       </h3>
       <div class="upload-controls">
@@ -31,12 +32,12 @@
           action="#"
           :auto-upload="false"
           :multiple="true"
-          :limit="6"
+          :limit="10"
           :on-change="handleFileChange"
           :on-exceed="handleExceed"
           :file-list="fileList"
           :before-upload="beforeUpload"
-          accept=".mp4,.ass"
+          :accept="uploadAccept"
           :show-file-list="false"
         >
           <el-button type="primary" :disabled="uploading" class="select-file-btn">
@@ -113,8 +114,30 @@
 
 <script setup>
 import { ref, computed } from 'vue';
-import { uploadVideo, uploadVideoByUrl } from '../api/index.js';
+import { uploadVideo, uploadVideoByUrl, uploadVideoBatch, getApiErrorDetail } from '../api/index.js';
 import { ElMessage } from 'element-plus';
+import { VIDEO_EXTENSIONS, DANMU_EXTENSIONS } from '../constants/media.js';
+
+/** el-upload accept 列表（与后端 ``ALLOWED_*`` 一致） */
+const uploadAccept = [...VIDEO_EXTENSIONS, ...DANMU_EXTENSIONS].join(',');
+
+const lowerName = (name) => String(name).toLowerCase();
+
+const stripMediaExt = (filename) => {
+  const n = lowerName(filename);
+  for (const ext of [...VIDEO_EXTENSIONS, ...DANMU_EXTENSIONS]) {
+    if (n.endsWith(ext)) {
+      return filename.substring(0, filename.length - ext.length);
+    }
+  }
+  return filename.replace(/\.[^/.]+$/, '');
+};
+
+const isVideoFile = (file) =>
+  VIDEO_EXTENSIONS.some((ext) => lowerName(file.name).endsWith(ext));
+
+const isDanmuFile = (file) =>
+  DANMU_EXTENSIONS.some((ext) => lowerName(file.name).endsWith(ext));
 
 const inputUrl = ref('');
 const fileList = ref([]);
@@ -162,7 +185,7 @@ const handleUrlSubmit = async () => {
       uploadProgress.value = 0;
     }, 1000);
   } catch (error) {
-    ElMessage.error(`URL 上传失败: ${error.response?.data?.detail || '网络错误'}`);
+    ElMessage.error(`URL 上传失败: ${getApiErrorDetail(error)}`);
     console.error('URL upload error:', error);
   } finally {
     uploading.value = false;
@@ -229,11 +252,9 @@ const handleExceed = (files, fileList) => {
 };
 
 const removeGroupFiles = (baseName) => {
-  // 移除指定基础文件名的所有文件
-  fileList.value = fileList.value.filter(item => {
-    const itemBaseName = item.name.replace(/\.(mp4|ass)$/, '');
-    return itemBaseName !== baseName;
-  });
+  fileList.value = fileList.value.filter(
+    (item) => stripMediaExt(item.name) !== baseName
+  );
   ElMessage.success('文件组已删除');
 };
 
@@ -256,90 +277,49 @@ const truncateFileName = (name) => {
   return name.substring(0, 7) + '...';
 };
 
-// 判断是否为视频文件
-const isVideoFile = (file) => {
-  return file.name.endsWith('.mp4');
-};
-
-// 判断是否为弹幕文件
-const isDanmuFile = (file) => {
-  return file.name.endsWith('.ass');
-};
-
-// 检查视频文件是否有匹配的弹幕文件
-const hasMatchingDanmu = (videoFile) => {
-  const videoName = videoFile.name.replace('.mp4', '');
-  return fileList.value.some(file => file.name === `${videoName}.ass`);
-};
-
-// 检查弹幕文件是否有匹配的视频文件
-const hasMatchingVideo = (danmuFile) => {
-  const danmuName = danmuFile.name.replace('.ass', '');
-  return fileList.value.some(file => file.name === `${danmuName}.mp4`);
-};
-
-// 检查文件类型
 const beforeUpload = (file) => {
-  // 检查文件类型
   if (!isVideoFile(file) && !isDanmuFile(file)) {
-    ElMessage.warning('只支持 .mp4 和 .ass 文件');
+    ElMessage.warning(
+      `支持的视频：${VIDEO_EXTENSIONS.join(' ')}；弹幕：${DANMU_EXTENSIONS.join(' ')}`
+    );
     return false;
   }
   
   return true;
 };
 
-// 按文件名分组
 const fileGroups = computed(() => {
   const groups = {};
-  
-  // 首先处理所有文件，按基础文件名分组
-  fileList.value.forEach(file => {
-    let baseName;
-    if (file.name.endsWith('.mp4')) {
-      baseName = file.name.replace('.mp4', '');
-    } else if (file.name.endsWith('.ass')) {
-      baseName = file.name.replace('.ass', '');
-    } else {
-      return; // 跳过非视频和非弹幕文件
+  fileList.value.forEach((file) => {
+    if (!isVideoFile(file) && !isDanmuFile(file)) {
+      return;
     }
-    
+    const baseName = stripMediaExt(file.name);
     if (!groups[baseName]) {
       groups[baseName] = {
         baseName,
         hasVideo: false,
-        hasDanmu: false
+        hasDanmu: false,
       };
     }
-    
-    if (file.name.endsWith('.mp4')) {
+    if (isVideoFile(file)) {
       groups[baseName].hasVideo = true;
-    } else if (file.name.endsWith('.ass')) {
+    }
+    if (isDanmuFile(file)) {
       groups[baseName].hasDanmu = true;
     }
   });
-  
-  // 转换为数组
   return Object.values(groups);
 });
 
-// 视频文件数量
-const videoFileCount = computed(() => {
-  return fileList.value.filter(file => file.name.endsWith('.mp4')).length;
-});
+const videoFileCount = computed(() => fileList.value.filter(isVideoFile).length);
 
-// 弹幕文件数量
-const danmuFileCount = computed(() => {
-  return fileList.value.filter(file => file.name.endsWith('.ass')).length;
-});
+const danmuFileCount = computed(() => fileList.value.filter(isDanmuFile).length);
 
 
 
 // 验证文件配对
-const validateFiles = () => {
-  const videoFiles = fileList.value.filter(file => file.name.endsWith('.mp4'));
-  return videoFiles.length > 0;
-};
+const validateFiles = () => fileList.value.some(isVideoFile);
 
 const handleFileUpload = async () => {
   if (fileList.value.length === 0) return;
@@ -351,13 +331,13 @@ const handleFileUpload = async () => {
   }
   
   // 检查是否有单独的弹幕文件（没有对应视频文件的弹幕文件）
-  const danmuFiles = fileList.value.filter(file => file.name.endsWith('.ass'));
+  const danmuFiles = fileList.value.filter(isDanmuFile);
+  const videoFilesAll = fileList.value.filter(isVideoFile);
   const singleDanmuFiles = [];
-  
   for (const danmuFile of danmuFiles) {
-    const videoFileName = danmuFile.name.replace('.ass', '.mp4');
-    const hasMatchingVideo = fileList.value.some(file => file.name === videoFileName);
-    if (!hasMatchingVideo) {
+    const stem = stripMediaExt(danmuFile.name);
+    const hasPair = videoFilesAll.some((f) => stripMediaExt(f.name) === stem);
+    if (!hasPair) {
       singleDanmuFiles.push(danmuFile.name);
     }
   }
@@ -367,27 +347,46 @@ const handleFileUpload = async () => {
     ElMessage.warning(`以下弹幕文件没有对应的视频文件，将被忽略: ${singleDanmuFiles.join(', ')}`);
   }
   
-  const videoFiles = fileList.value.filter(file => file.name.endsWith('.mp4'));
-  
+  const videoFiles = fileList.value.filter(isVideoFile);
+  const anyPairedDanmu = videoFiles.some((vf) => {
+    const stem = stripMediaExt(vf.name);
+    return fileList.value.some((f) => isDanmuFile(f) && stripMediaExt(f.name) === stem);
+  });
+
   uploading.value = true;
   uploadProgress.value = 0;
-  
+
   try {
-    // 收集成功上传的文件名称
     const uploadedFileNames = [];
-    
-    // 逐个上传视频文件
+
+    if (!anyPairedDanmu && videoFiles.length > 1) {
+      const formData = new FormData();
+      videoFiles.forEach((vf) => {
+        formData.append('videos', vf.raw);
+      });
+      const batchRes = await uploadVideoBatch(formData, (progressEvent) => {
+        const total = progressEvent.total || 1;
+        uploadProgress.value = Math.round((progressEvent.loaded * 100) / total);
+      });
+      const items = Array.isArray(batchRes.data) ? batchRes.data : [];
+      items.forEach((v) => {
+        emit('upload', { type: 'file', video: v });
+      });
+      videoFiles.forEach((f) => uploadedFileNames.push(f.name));
+      ElMessage.success(`已批量提交 ${items.length} 个视频，正在分析…`);
+    } else {
     for (let i = 0; i < videoFiles.length; i++) {
       const file = videoFiles[i].raw;
       const formData = new FormData();
       formData.append('video', file);
-      
-      // 查找对应的弹幕文件
-      const danmuFileName = file.name.replace('.mp4', '.ass');
-      const danmuFile = fileList.value.find(f => f.name === danmuFileName);
+
+      const stem = stripMediaExt(file.name);
+      const danmuFile = fileList.value.find(
+        (f) => isDanmuFile(f) && stripMediaExt(f.name) === stem
+      );
       if (danmuFile) {
         formData.append('danmu', danmuFile.raw);
-        uploadedFileNames.push(danmuFileName);
+        uploadedFileNames.push(danmuFile.name);
       }
       
       const response = await uploadVideo(formData, (progressEvent) => {
@@ -399,11 +398,12 @@ const handleFileUpload = async () => {
       ElMessage.success(`视频 ${file.name} 上传成功，正在分析...`);
       emit('upload', { type: 'file', video: response.data });
     }
-    
+    }
+
     // 只移除成功上传的文件，保留单独的弹幕文件
     fileList.value = fileList.value.filter(file => !uploadedFileNames.includes(file.name));
   } catch (error) {
-    ElMessage.error('上传失败，请重试');
+    ElMessage.error(`上传失败: ${getApiErrorDetail(error)}`);
     console.error('Upload error:', error);
   } finally {
     uploading.value = false;
@@ -461,8 +461,7 @@ const handleFileUpload = async () => {
 }
 
 .url-submit-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 6px -1px rgba(59, 130, 246, 0.4);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.28);
 }
 
 /* 消除输入框和按钮之间的间隙 */
@@ -506,28 +505,34 @@ const handleFileUpload = async () => {
 }
 
 .select-file-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 6px -1px rgba(59, 130, 246, 0.4);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.28);
 }
 
 .upload-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 6px -1px rgba(16, 185, 129, 0.4);
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.32);
 }
 
 .clear-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 6px -1px rgba(245, 158, 11, 0.4);
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.32);
 }
 
 /* 上传提示 */
 .upload-tip {
   font-size: 14px;
   color: #6b7280;
-  padding: 3px 5px;
+  padding: 6px 8px;
   background-color: #f3f4f6;
   border-radius: 4px;
   border-inline: 3px solid #3b82f6;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  line-height: 1.35;
+}
+
+.upload-tip-line {
+  display: block;
+  white-space: nowrap;
 }
 
 /* 空状态 */

@@ -3,13 +3,64 @@
     <template #header>
       <div class="card-header">
         <span><i class="fa-solid fa-folder-open"></i> 已上传视频</span>
-        <el-badge :value="files.length" type="primary" />
+        <el-badge :value="badgeCount" type="primary" />
       </div>
     </template>
-    <div class="table-container">
-      <el-empty v-if="files.length === 0" description="暂无上传视频" style="height: 100%; display: flex; align-items: center; justify-content: center;" />
+    <div class="list-body">
+    <div class="list-toolbar">
+      <el-select
+        :model-value="filterStatus"
+        placeholder="状态"
+        clearable
+        size="small"
+        class="toolbar-select"
+        @change="onStatusChange"
+      >
+        <el-option label="全部状态" value="" />
+        <el-option label="待处理" value="pending" />
+        <el-option label="待分析" value="downloaded" />
+        <el-option label="处理中" value="processing" />
+        <el-option label="已完成" value="completed" />
+        <el-option label="失败" value="failed" />
+      </el-select>
+      <el-input
+        v-model="filenameDraft"
+        size="small"
+        clearable
+        placeholder="文件名包含…"
+        class="toolbar-input"
+        @keyup.enter="applyFilenameSearch"
+      />
+      <el-button type="primary" size="small" class="toolbar-search-btn" @click="applyFilenameSearch">搜索</el-button>
+    </div>
+    <div
+      class="table-container"
+      @scroll.passive="onScroll"
+    >
+      <el-empty
+        v-if="files.length === 0 && !loadingMore"
+        :description="emptyDescription"
+        style="height: 100%; display: flex; align-items: center; justify-content: center;"
+      />
+      <template v-else-if="files.length === 0 && loadingMore">
+        <div class="list-loading-placeholder">
+          <el-icon class="is-loading"><Loading /></el-icon>
+          <span>加载列表中…</span>
+        </div>
+      </template>
       <el-table v-else :data="files" style="width: 100%;" :stripe="true" :header-cell-style="{ position: 'sticky', top: 0, zIndex: 0, backgroundColor: '#ffffff' }">
-        <el-table-column prop="filename" label="视频名" min-width="150">
+        <el-table-column label="" width="52" align="center">
+          <template #default="scope">
+            <img
+              v-if="scope.row.thumbnail_path"
+              :src="thumbUrl(scope.row.thumbnail_path)"
+              class="row-thumb"
+              alt=""
+            />
+            <i v-else class="fa-regular fa-image row-thumb-placeholder" aria-hidden="true"></i>
+          </template>
+        </el-table-column>
+        <el-table-column prop="filename" label="视频名" min-width="130">
           <template #default="scope">
             <div class="file-info" :class="{ 'current-video': scope.row.id === currentVideoId }">
               <i v-if="scope.row.id === currentVideoId" class="fa-solid fa-play-circle current-video-icon"></i>
@@ -23,7 +74,7 @@
           <template #default="scope">
             <span v-if="scope.row.score_change !== null" class="score-change" :class="getScoreChangeClass(scope.row.score_change)">
               <i :class="getScoreChangeIcon(scope.row.score_change)"></i>
-              <span>{{ scope.row.score_change.toFixed(2) }}</span>
+              <span>{{ Math.round(scope.row.score_change) }}</span>
             </span>
             <span v-else class="score-change none">
               <i class="fa-solid fa-minus"></i>
@@ -37,9 +88,9 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="60">
+        <el-table-column label="操作" width="72">
           <template #default="scope">
-            <div style="display: flex; flex-direction: column; gap: 4px; align-items: stretch;">
+            <div class="action-col">
               <el-button 
                 v-if="scope.row.status === 'completed'" 
                 type="primary" 
@@ -48,6 +99,15 @@
                 style="width: 100%; margin: 0;"
               >
                 查看
+              </el-button>
+              <el-button
+                v-if="scope.row.status === 'completed' || scope.row.status === 'failed'"
+                type="warning"
+                size="small"
+                @click="$emit('reanalyze', scope.row.id)"
+                style="width: 100%; margin: 0;"
+              >
+                重分析
               </el-button>
               <el-button 
                 type="danger" 
@@ -61,27 +121,114 @@
           </template>
         </el-table-column>
       </el-table>
+      <div v-if="files.length > 0" class="list-footer">
+        <template v-if="loadingMore">
+          <el-icon class="is-loading footer-icon"><Loading /></el-icon>
+          <span>加载中…</span>
+        </template>
+        <span v-else-if="!hasMore" class="footer-done">
+          已加载全部 {{ totalCount }} 条
+        </span>
+        <span v-else class="footer-hint">下滑加载更多</span>
+      </div>
+    </div>
     </div>
   </el-card>
 </template>
 
 <script setup>
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { computed, ref, watch } from 'vue';
+import { ElMessageBox } from 'element-plus';
+import { Loading } from '@element-plus/icons-vue';
+import { uploadsPublicUrl } from '../api/index.js';
+
+const thumbUrl = (p) => (p ? uploadsPublicUrl(p) : '');
 
 const props = defineProps({
   files: Array,
   currentVideoId: {
     type: Number,
-    default: null
-  }
+    default: null,
+  },
+  /** 服务端总数（用于角标与底部文案） */
+  totalCount: {
+    type: Number,
+    default: 0,
+  },
+  loadingMore: {
+    type: Boolean,
+    default: false,
+  },
+  hasMore: {
+    type: Boolean,
+    default: false,
+  },
+  filterStatus: {
+    type: String,
+    default: '',
+  },
+  filterFilename: {
+    type: String,
+    default: '',
+  },
 });
 
-const emit = defineEmits(['view', 'delete']);
+const emit = defineEmits(['view', 'delete', 'reanalyze', 'load-more', 'filters-change']);
+
+const filenameDraft = ref(props.filterFilename);
+watch(
+  () => props.filterFilename,
+  (v) => {
+    filenameDraft.value = v;
+  }
+);
+
+const emptyDescription = computed(() =>
+  props.filterStatus || props.filterFilename ? '暂无符合条件的视频' : '暂无上传视频'
+);
+
+const emitFilters = (payload) => {
+  emit('filters-change', payload);
+};
+
+const onStatusChange = (v) => {
+  emitFilters({
+    status: v ?? '',
+    filename: filenameDraft.value.trim(),
+  });
+};
+
+const applyFilenameSearch = () => {
+  emitFilters({
+    status: props.filterStatus,
+    filename: filenameDraft.value.trim(),
+  });
+};
+
+const badgeCount = computed(() =>
+  props.totalCount > 0 ? props.totalCount : props.files?.length ?? 0
+);
+
+const lastLoadMoreAt = ref(0);
+const LOAD_MORE_COOLDOWN_MS = 450;
+
+const onScroll = (e) => {
+  const el = e.target;
+  const threshold = 80;
+  if (el.scrollHeight - el.scrollTop - el.clientHeight > threshold) return;
+  if (!props.hasMore || props.loadingMore) return;
+  const now = Date.now();
+  if (now - lastLoadMoreAt.value < LOAD_MORE_COOLDOWN_MS) return;
+  lastLoadMoreAt.value = now;
+  emit('load-more');
+};
 
 const getStatusType = (status) => {
   switch (status) {
     case 'pending':
       return 'info';
+    case 'downloaded':
+      return '';
     case 'processing':
       return 'warning';
     case 'completed':
@@ -97,6 +244,8 @@ const getStatusText = (status) => {
   switch (status) {
     case 'pending':
       return '待处理';
+    case 'downloaded':
+      return '待分析';
     case 'processing':
       return '处理中';
     case 'completed':
@@ -137,10 +286,9 @@ const deleteVideo = async (video) => {
     // 通知父组件处理删除
     emit('delete', video.id);
   } catch (error) {
-    // 如果用户取消删除，不显示错误消息
+    // 用户取消不提示；其它异常极少见，实际删除错误由首页接口结果提示
     if (error !== 'cancel') {
-      ElMessage.error('删除失败，请重试');
-      console.error('Delete error:', error);
+      console.warn('确认删除对话框异常:', error);
     }
   }
 };
@@ -185,6 +333,26 @@ const getScoreChangeIcon = (scoreChange) => {
   font-size: 16px;
 }
 
+.row-thumb {
+  width: 40px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 4px;
+  display: block;
+}
+
+.row-thumb-placeholder {
+  color: #d1d5db;
+  font-size: 1.25rem;
+}
+
+.action-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: stretch;
+}
+
 /* 徽章样式 */
 :deep(.el-badge__content) {
   font-size: 14px;
@@ -197,8 +365,8 @@ const getScoreChangeIcon = (scoreChange) => {
 }
 
 :deep(.el-badge__content:hover) {
-  transform: scale(1.1);
-  box-shadow: 0 4px 6px rgba(59, 130, 246, 0.4);
+  filter: brightness(1.06);
+  box-shadow: 0 4px 6px rgba(59, 130, 246, 0.35);
 }
 
 /* 文件信息 */
@@ -236,7 +404,6 @@ const getScoreChangeIcon = (scoreChange) => {
 
 .file-info.current-video:hover {
   background-color: rgba(59, 130, 246, 0.15);
-  transform: translateX(2px);
 }
 
 .current-video-icon {
@@ -259,19 +426,17 @@ const getScoreChangeIcon = (scoreChange) => {
 }
 
 .current-video-badge:hover {
-  transform: scale(1.05);
   box-shadow: 0 4px 6px rgba(59, 130, 246, 0.4);
+  filter: brightness(1.05);
 }
 
 @keyframes pulse {
-  0% {
-    transform: scale(1);
+  0%,
+  100% {
+    opacity: 1;
   }
   50% {
-    transform: scale(1.1);
-  }
-  100% {
-    transform: scale(1);
+    opacity: 0.72;
   }
 }
 
@@ -288,7 +453,7 @@ const getScoreChangeIcon = (scoreChange) => {
 }
 
 .score-change:hover {
-  transform: scale(1.05);
+  filter: brightness(1.03);
 }
 
 .score-change.increase {
@@ -323,11 +488,49 @@ const getScoreChangeIcon = (scoreChange) => {
   color: #9ca3af;
 }
 
+.list-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.list-toolbar {
+  flex-shrink: 0;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  background: #fafafa;
+  min-width: 0;
+}
+
+.toolbar-select {
+  width: 118px;
+  flex-shrink: 0;
+}
+
+.toolbar-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.list-toolbar :deep(.el-input) {
+  min-width: 0;
+}
+
+.toolbar-search-btn {
+  flex-shrink: 0;
+}
+
 /* 表格容器 */
 .table-container {
   flex: 1;
+  min-height: 0;
   overflow: auto;
-  height: 100%;
   border-radius: 0 0 8px 8px;
 }
 
@@ -362,8 +565,7 @@ const getScoreChangeIcon = (scoreChange) => {
 }
 
 :deep(.el-table__row:hover) {
-  background-color: #f3f4f6 !important;
-  transform: translateX(4px);
+  background-color: #eef2f7 !important;
 }
 
 :deep(.el-table__header th) {
@@ -384,8 +586,7 @@ const getScoreChangeIcon = (scoreChange) => {
 }
 
 :deep(.el-button:hover) {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
 }
 
 :deep(.el-button--primary:hover) {
@@ -405,7 +606,7 @@ const getScoreChangeIcon = (scoreChange) => {
 }
 
 :deep(.el-tag:hover) {
-  transform: scale(1.05);
+  filter: brightness(1.04);
 }
 
 /* 空状态 */
@@ -426,5 +627,40 @@ const getScoreChangeIcon = (scoreChange) => {
 :deep(.el-empty__image) {
   width: 80px;
   height: 80px;
+}
+
+.list-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: #6b7280;
+  border-top: 1px solid #f3f4f6;
+  flex-shrink: 0;
+}
+
+.footer-icon {
+  font-size: 14px;
+}
+
+.footer-done {
+  color: #9ca3af;
+}
+
+.footer-hint {
+  color: #9ca3af;
+}
+
+.list-loading-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 160px;
+  color: #6b7280;
+  font-size: 14px;
 }
 </style>

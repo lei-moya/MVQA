@@ -1,483 +1,483 @@
-import os
-import re
-import cv2
-import wave
-import torch
-import numpy as np
+"""
+MVQA 推理与预处理：加载多模态子模型与 traced 融合网络，对单条视频（及可选弹幕）输出片段级与视频级分数。
 
-# 获取当前文件的绝对路径
+``predict_video_qa(..., user_id=...)`` 通过上下文变量将配置解析到对应用户的 ``Setting``；
+未传入时回退为 user_id=1（兼容脚本直接调用）。
+"""
+
+import contextvars
+import os
+from typing import Optional, Tuple
+
+import numpy as np
+import torch
+
+from backend.model.mvqa import MVQA
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+MVQA_CONFIG_USER_ID: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
+    "mvqa_config_user_id", default=None
+)
+
 # ==========================================
-# 第三方库导入
+# 配置参数
 # ==========================================
-from moviepy import VideoFileClip
+from backend.config import config_manager, DEFAULT_CONFIG
+from backend.database import SessionLocal
+
+class Config:
+    # 融合层维度
+    FUSION_DIM = 512
+    # 输出维度
+    OUTPUT_DIM = 12
+    
+    @classmethod
+    def get_config(cls):
+        """从数据库加载与当前 MVQA 上下文对应的用户配置（默认用户 1）。"""
+        db = SessionLocal()
+        try:
+            uid = MVQA_CONFIG_USER_ID.get()
+            if uid is None:
+                uid = 1
+            CONFIG = config_manager.get_config(user_id=uid, db=db)
+        except Exception as e:
+            print(f"加载配置失败: {e}")
+            CONFIG = DEFAULT_CONFIG
+        finally:
+            db.close()
+        return CONFIG
+    
+    @classmethod
+    def get_whisper_model(cls):
+        return cls.get_config().get("model_paths", {}).get("whisper_model", os.path.join(BASE_DIR, "model/whisper-medium"))
+    
+    @classmethod
+    def get_audio_model(cls):
+        return cls.get_config().get("model_paths", {}).get("audio_model", os.path.join(BASE_DIR, "model/ast-finetuned-audioset-10-10-0.4593"))
+    
+    @classmethod
+    def get_text_model(cls):
+        return cls.get_config().get("model_paths", {}).get("text_model", os.path.join(BASE_DIR, "model/roberta-wwm-ext"))
+    
+    @classmethod
+    def get_visual_model(cls):
+        return cls.get_config().get("model_paths", {}).get("visual_model", os.path.join(BASE_DIR, "model/vit-base-patch16-224"))
+    
+    @classmethod
+    def get_sensitive_words(cls):
+        return cls.get_config().get("sensitive_words", ["违禁词", "暴力", "涉黄", "反动", "测试", "傻叉", "漫展", "三十"])
+    
+    @classmethod
+    def get_num_clips(cls):
+        return cls.get_config().get("video_processing", {}).get("num_clips", 125)
+    
+    @classmethod
+    def get_frames_per_clip(cls):
+        return cls.get_config().get("video_processing", {}).get("frames_per_clip", 5)
+    
+    @classmethod
+    def get_target_size(cls):
+        return tuple(cls.get_config().get("video_processing", {}).get("target_size", [224, 224]))
+    
+    @classmethod
+    def get_sample_rate(cls):
+        return cls.get_config().get("audio_processing", {}).get("sample_rate", 16000)
+    
+    @classmethod
+    def get_traced_model_path(cls):
+        return cls.get_config().get("model_paths", {}).get("traced_model_path", os.path.join(BASE_DIR, "model/mvqa_traced.pt"))
+
+
+# ==========================================
+# 核心工具类导入
+# ==========================================
+from backend.utils.text_utils import AsideFilter, ASSParser, FineGrainedAligner
+from backend.utils.video_utils import VideoFrameExtractor
+from backend.utils.audio_utils import VideoAudioSegmentProcessor
+
+# ==========================================
+# 数据预处理器
+# ==========================================
 from transformers import (
     AutoTokenizer,
     ViTImageProcessor,
     ASTFeatureExtractor
 )
 
-
-# ==========================================
-# 1. 配置参数
-# ==========================================
-from backend.config import CONFIG
-
-class Config:
-    # 模型路径 - 使用配置文件中的路径
-    VIDEO_MODEL = CONFIG["model_paths"]["video_model"]
-    VIDEO_SCORER = CONFIG["model_paths"]["video_scorer"]
-    AUDIO_MODEL = CONFIG["model_paths"]["audio_model"]
-    TEXT_MODEL = CONFIG["model_paths"]["text_model"]
-    VISUAL_MODEL = CONFIG["model_paths"]["visual_model"]
-
-    # 敏感词
-    SENSITIVE_WORDS = CONFIG["sensitive_words"]
-
-    # 视频处理参数
-    NUM_CLIPS = CONFIG["video_processing"]["num_clips"]
-    FRAMES_PER_CLIP = CONFIG["video_processing"]["frames_per_clip"]
-    TARGET_SIZE = tuple(CONFIG["video_processing"]["target_size"])
-
-    # 音频处理参数
-    SAMPLE_RATE = CONFIG["audio_processing"]["sample_rate"]
-
-    # Traced模型路径
-    TRACED_MODEL_PATH = CONFIG["model_paths"]["traced_model_path"]
-
-
-# ==========================================
-# 2. 核心工具类定义
-# ==========================================
-
-# --- 文本处理工具 ---
-class DFAModel:
-    """基于DFA算法的敏感词过滤"""
-
-    def __init__(self):
-        self.keyword_chains = {}
-        self.delimit = '\x00'
-
-    def add_word(self, word):
-        word = word.strip().lower()
-        if not word: return
-        level = self.keyword_chains
-        for char in word:
-            if char not in level: level[char] = {}
-            level = level[char]
-        level[self.delimit] = word
-
-    def parse(self, words_list):
-        for word in words_list: self.add_word(word)
-
-    def filter_match(self, text):
-        text = text.lower()
-        matched_words = []
-        start = 0
-        while start < len(text):
-            level = self.keyword_chains
-            step_ins = 0
-            flag = False
-            current_word = ""
-            for i in range(start, len(text)):
-                char = text[i]
-                if char in level:
-                    step_ins += 1
-                    current_word += char
-                    level = level[char]
-                    if self.delimit in level:
-                        matched_words.append(current_word)
-                        flag = True
-                        break
-                else:
-                    break
-            if flag:
-                start += step_ins
-            else:
-                start += 1
-        return list(set(matched_words))
-
-
-class AsideFilter:
-    def __init__(self, sensitive_words):
-        self.dfa_model = DFAModel()
-        self.dfa_model.parse(words_list=sensitive_words)
-        self.ds = None
-        try:
-            from deepspeech import Model
-            # if os.path.exists(Config.VIDEO_MODEL):
-            #     self.ds = Model(Config.VIDEO_MODEL)
-            #     self.ds.enableExternalScorer(Config.VIDEO_SCORER)
-            #     print("Deepspeech 模型加载成功。")
-            # else:
-            #     print(f"[警告] 未找到语音模型: {Config.VIDEO_MODEL}，旁白功能将被禁用。")
-        except ImportError:
-            print("[警告] 未安装 deepspeech 库，旁白功能将被禁用。")
-
-    def extract_audio(self, video_path, audio_save_path=None):
-        try:
-            # 生成唯一的临时文件名，避免并发处理时的冲突
-            if audio_save_path is None:
-                import uuid
-                audio_save_path = f"temp_audio_{uuid.uuid4().hex}.wav"
-            
-            clip = VideoFileClip(video_path)
-            if clip.audio is None: return None
-            clip.audio.write_audiofile(
-                audio_save_path, fps=16000, nbytes=2, codec='pcm_s16le',
-                ffmpeg_params=["-ac", "1"], logger=None
-            )
-            return audio_save_path
-        except Exception as e:
-            print(f"音频提取失败: {e}")
-            return None
-
-    def load_wav(self, path):
-        with wave.open(path, "r") as wf:
-            frames = wf.readframes(wf.getnframes())
-            return np.frombuffer(frames, dtype=np.int16)
-
-    def transcribe_audio(self, audio_path):
-        if not self.ds: return ""
-        try:
-            audio = self.load_wav(audio_path)
-            return self.ds.stt(audio)
-        except Exception as e:
-            print(f"语音识别出错: {e}")
-            return ""
-
-    def process_video(self, video_path):
-        audio_path = self.extract_audio(video_path)
-        if not audio_path: return [], ""
-        text = self.transcribe_audio(audio_path)
-        matches = self.dfa_model.filter_match(text)
-        if os.path.exists(audio_path): os.remove(audio_path)
-        return matches, text
-
-
-class ASSParser:
-    def __init__(self):
-        self.dialogue_pattern = re.compile(
-            r"Dialogue:\s*(.*?)\s*,(\d:\d{2}:\d{2}\.\d{2}),(\d:\d{2}:\d{2}\.\d{2}),.*?,.*?,.*?,.*?,.*?,.*?,(.*)")
-        self.tag_pattern = re.compile(r"\{.*?\}")
-
-    def _time_to_seconds(self, time_str):
-        parts = time_str.split(':')
-        return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
-
-    def _clean_text(self, text):
-        text = self.tag_pattern.sub('', text)
-        return text.replace('\\N', ' ').strip()
-
-    def parse(self, file_path):
-        danmaku_list = []
-        if not os.path.exists(file_path): return danmaku_list
-        with open(file_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                if line.startswith("Dialogue:"):
-                    match = self.dialogue_pattern.match(line)
-                    if match:
-                        danmaku_list.append({
-                            'start': self._time_to_seconds(match.group(2)),
-                            'end': self._time_to_seconds(match.group(3)),
-                            'text': self._clean_text(match.group(4))
-                        })
-        return danmaku_list
-
-
-class DanmuSegmentAligner:
-    def __init__(self, danmaku_list):
-        self.danmaku_list = sorted(danmaku_list, key=lambda x: x['start'])
-
-    def align_by_clips(self, clip_timestamps):
-        num_clips = clip_timestamps.shape[0]
-        clip_texts = []
-        for i in range(num_clips):
-            t_start = clip_timestamps[i][0]
-            t_end = clip_timestamps[i][-1]
-            segment_text = []
-            for d in self.danmaku_list:
-                if d['start'] <= t_end and d['end'] >= t_start:
-                    segment_text.append(d['text'])
-                if d['start'] > t_end: break
-            clip_texts.append(" ".join(segment_text) if segment_text else "")
-        return clip_texts
-
-
-# --- 视频处理工具 ---
-class VideoFrameExtractor:
-    def __init__(self):
-        self.num_clips = Config.NUM_CLIPS
-        self.frames_per_clip = Config.FRAMES_PER_CLIP
-        self.target_size = Config.TARGET_SIZE
-
-    def _calculate_sample_indices(self, total_frames):
-        if total_frames <= self.num_clips:
-            indices = np.linspace(0, total_frames - 1, self.num_clips * self.frames_per_clip, dtype=int)
-            return indices.reshape(self.num_clips, self.frames_per_clip)
-        clip_boundaries = np.linspace(0, total_frames, self.num_clips + 1, dtype=int)
-        all_indices = []
-        for i in range(self.num_clips):
-            start_f, end_f = clip_boundaries[i], clip_boundaries[i + 1]
-            clip_len = end_f - start_f
-            if clip_len == 0:
-                segment_indices = np.full(self.frames_per_clip, start_f - 1 if start_f > 0 else 0)
-            else:
-                segment_indices = np.linspace(start_f, end_f - 1, self.frames_per_clip, dtype=int)
-            all_indices.append(segment_indices)
-        return np.array(all_indices)
-
-    def extract_frames_with_timestamps(self, video_path):
-        cap = cv2.VideoCapture(str(video_path))
-        if not cap.isOpened(): raise RuntimeError(f"无法打开视频: {video_path}")
-        try:
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            sample_indices = self._calculate_sample_indices(total_frames)
-            frames_list, timestamps_list = [], []
-            for clip_idx in range(self.num_clips):
-                clip_frames, clip_timestamps = [], []
-                for frame_idx in sample_indices[clip_idx]:
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-                    ret, frame = cap.read()
-                    if not ret:
-                        frame = np.zeros((self.target_size[0], self.target_size[1], 3), dtype=np.float32)
-                    else:
-                        frame = cv2.resize(frame, self.target_size)
-                        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                        frame = frame.astype(np.float32) / 255.0
-                    clip_frames.append(frame)
-                    clip_timestamps.append(frame_idx / fps)
-                frames_list.append(clip_frames)
-                timestamps_list.append(clip_timestamps)
-            return np.array(frames_list).astype(np.float32), np.array(timestamps_list).astype(np.float32)
-        finally:
-            cap.release()
-
-
-# --- 音频处理工具 ---
-class AudioSegmentWaveformExtractor:
-    def __init__(self):
-        self.n_segments = Config.NUM_CLIPS
-
-    def extract_segment_waveforms(self, video_path):
-        video_clip = VideoFileClip(video_path)
-        audio_clip = video_clip.audio
-        if audio_clip is None:
-            video_clip.close()
-            raise ValueError("视频无音轨")
-
-        duration = audio_clip.duration
-        segment_length = duration / self.n_segments
-        waveforms = []
-
-        try:
-            for i in range(self.n_segments):
-                start = i * segment_length
-                end = start + segment_length if i < self.n_segments - 1 else duration
-                segment_clip = audio_clip[start:end]
-                y_segment = segment_clip.to_soundarray(fps=Config.SAMPLE_RATE)
-                if y_segment.ndim > 1: y_segment = y_segment.mean(axis=1)
-                waveforms.append(y_segment.astype(np.float32))
-            return waveforms, duration
-        finally:
-            video_clip.close()
-
-
-# --- 数据预处理器 ---
 class MVQAPreprocessor:
+    """MVQA数据预处理器"""
+
     def __init__(self):
-        print("初始化预处理器...")
-        try:
-            self.image_processor = ViTImageProcessor.from_pretrained(Config.VISUAL_MODEL)
-            print(f"✓ 视觉模型处理器加载成功: {Config.VISUAL_MODEL}")
-        except Exception as e:
-            print(f"✗ 视觉模型处理器加载失败: {e}")
-            raise
-        
-        try:
-            self.audio_processor = ASTFeatureExtractor.from_pretrained(Config.AUDIO_MODEL)
-            print(f"✓ 音频模型处理器加载成功: {Config.AUDIO_MODEL}")
-        except Exception as e:
-            print(f"✗ 音频模型处理器加载失败: {e}")
-            raise
-        
-        try:
-            self.text_tokenizer = AutoTokenizer.from_pretrained(Config.TEXT_MODEL)
-            print(f"✓ 文本模型处理器加载成功: {Config.TEXT_MODEL}")
-        except Exception as e:
-            print(f"✗ 文本模型处理器加载失败: {e}")
-            raise
-        
-        print("预处理器初始化完成\n")
+        # 加载各模态的processor
+        visual_model = Config.get_visual_model()
+        audio_model = Config.get_audio_model()
+        text_model = Config.get_text_model()
+        self.image_processor = ViTImageProcessor.from_pretrained(visual_model)
+        self.audio_processor = ASTFeatureExtractor.from_pretrained(audio_model)
+        self.text_tokenizer = AutoTokenizer.from_pretrained(text_model)
 
     def process_audio(self, audio_array, sample_rate=16000):
         """
         处理音频数据
         Args:
-            audio_array: List of numpy arrays (waveforms)
+            audio_array: numpy array (num_clips, samples,)
+            sample_rate: 采样率
         Returns:
-            Tensor: (num_clips, 128, 1024)
+            处理后的音频特征 (num_clips, 128, 1024)
         """
-        inputs = self.audio_processor(
-            list(audio_array),
-            sampling_rate=sample_rate,
-            return_tensors="pt",
-            truncation=True,
-            max_length=1024
-        )
-        input_values = inputs["input_values"]
+        try:
+            inputs = self.audio_processor(
+                list(audio_array),
+                sampling_rate=sample_rate,
+                return_tensors="pt",
+                truncation=True,  # 强制截断
+                max_length=1024  # AST 标准长度
+            )
 
-        # 【修正2】移除错误的转置逻辑
-        # ASTFeatureExtractor 输出格式为: (Batch, Time=1024, Freq=128)
-        # AST 模型期望输入格式: (Batch, Time=1024, Freq=128)
-        # 两者一致，无需转置。
-        # 原代码中的转置会导致将时间和频率维度颠倒，破坏特征。
+            # 【关键修正】
+            # AST 模型期望输入形状：(Batch, Frequency=128, Time=1024)
+            # ASTFeatureExtractor 默认输出正是：(Batch, 128, 1024)
+            # 因此，不需要任何转置操作！
 
-        return input_values
+            input_values = inputs["input_values"]
+
+            if input_values.shape[-1] == 128 and input_values.shape[-2] == 1024:
+                input_values = input_values.transpose(1, 2)
+
+            return input_values
+        except Exception as e:
+            print(f"音频处理出错: {e}")
+            return torch.zeros((audio_array.shape[0], 128, 1024))
 
     def process_text(self, text, max_length=512):
+        """
+        处理文本数据
+        Args:
+            text: 字符串 或 字符串列表
+            max_length: 最大长度
+        Returns:
+            input_ids, attention_mask
+        """
         inputs = self.text_tokenizer(
-            text, max_length=max_length, padding="max_length",
-            truncation=True, return_tensors="pt"
+            text,
+            max_length=max_length,
+            padding="longest",
+            truncation=True,
+            return_tensors="pt"
         )
         return inputs["input_ids"], inputs["attention_mask"]
 
     def process_frames(self, frames):
-        num_frames = frames.shape[1]
-        # (N, T, H, W, C) -> (N, T, C, H, W)
+        """
+        处理视频帧
+        Args:
+            frames: numpy array (300, num_frames, H, W, C) 或 (300, num_frames, C, H, W)
+        Returns:
+            处理后的像素值 (300, num_frames, C, H, W)
+        """
+
+        # 1. 通道顺序处理
+        # 如果最后一维是3，说明是 (Batch, Time, H, W, C)，需要转为 (Batch, Time, C, H, W)
         if frames.shape[-1] == 3:
+            # (125, T, H, W, C) -> (125, T, C, H, W)
             frames = np.transpose(frames, (0, 1, 4, 2, 3))
-        if frames.max() <= 1.0: frames = frames * 255.0
+
+        # 此时 frames 形状应为 (125, Time, C, H, W)
+
+        # 2. 归一化到 0-255
+        # 注意：这里对整个数组判断，如果有任何一个值大于1.0则不缩放。
+        # 更安全的做法通常是判断数据类型是否为 float 且最大值小于等于1
+        if frames.max() <= 1.0:
+            frames = frames * 255.0
+
+        # 3. 展平批次和时间维度
+        # ViT处理器通常只接受 (N, C, H, W)，因此需要将前两维合并
+        # (125, Time, C, H, W) -> (125 * Time, C, H, W)
         frames_flat = frames.reshape(-1, *frames.shape[2:])
-        inputs = self.image_processor(frames_flat, return_tensors="pt", do_rescale=False)
-        pixel_values = inputs["pixel_values"]
-        # 恢复 (N, T, C, H, W)
-        processed_frames = pixel_values.view(Config.NUM_CLIPS, num_frames, *pixel_values.shape[1:])
+
+        # 4. 使用ViT处理器
+        # image_processor 会处理 resize, normalization 等操作
+        # 输入: (Batch*Time, C, H, W) numpy array
+        # 输出: pixel_values tensor
+        inputs = self.image_processor(
+            frames_flat,
+            return_tensors="pt",
+            do_rescale=False,
+        )
+
+        pixel_values = inputs["pixel_values"]  # shape: (Batch*Time, C, H_new, W_new)
+
+        # 5. 恢复形状
+        # (125 * Time, C, H, W) -> (125, Time, C, H, W)
+        # 注意：这里的 H, W 可能已经被处理器 resize 到模型所需大小 (如 224x224)
+        processed_frames = pixel_values.view(Config.get_num_clips(), Config.get_frames_per_clip(), *pixel_values.shape[1:])
+
         return processed_frames
 
 
-# ==========================================
-# 3. 核心预测函数
-# ==========================================
-def predict_video_qa(video_path: str, ass_path: str = "", device: str = 'cpu'):
-    print(f"\n{'=' * 60}")
-    print(f"开始处理视频: {video_path}")
-    print(f"{'=' * 60}")
+def _process_single_prediction(pred: np.ndarray, min_diff: float = 1.0) -> np.ndarray:
+    """
+    处理单个预测样本：前 10 维组内排序并放大差异；第 11 维综合分映射到 0~100；
+    第 12 维限制在 [-1, 1]。
+    """
+    if len(pred) <= 1:
+        result = np.array([max(4.0, min(9.0, pred[0]))])
+        return np.floor(result).astype(int)
 
-    # 1. 初始化
-    preprocessor = MVQAPreprocessor()
-    model_path = Config.TRACED_MODEL_PATH
-    if not os.path.exists(model_path):
-        print(f"[错误] 模型文件不存在: {model_path}")
-        return None, None
+    first_5 = pred[0:5]
+    second_5 = pred[5:10]
+    score = pred[10]
+    mood = pred[11]
 
-    print(f"加载追踪模型: {model_path}")
+    sorted_first = np.sort(first_5)
+    sorted_second = np.sort(second_5)
+    sorted_indices_first = np.argsort(first_5)
+    sorted_indices_second = np.argsort(second_5)
+
+    processed_first_sorted = np.zeros_like(first_5)
+    processed_second_sorted = np.zeros_like(second_5)
+    max_count = 0
+
+    if len(processed_first_sorted) > 0:
+        processed_first_sorted[0] = max(4.0, sorted_first[0])
+        for i in range(1, len(processed_first_sorted)):
+            target_diff = max(min_diff, (sorted_first[i] - sorted_first[i - 1]) * 1.5)
+            next_val = processed_first_sorted[i - 1] + target_diff
+            if next_val >= 9.0:
+                if max_count == 0:
+                    processed_first_sorted[i] = 9.0
+                    max_count += 1
+                else:
+                    processed_first_sorted[i] = 8.0
+            else:
+                processed_first_sorted[i] = next_val
+
+    if len(processed_second_sorted) > 0:
+        processed_second_sorted[0] = max(4.0, sorted_second[0])
+        for i in range(1, len(processed_second_sorted)):
+            target_diff = max(min_diff, (sorted_second[i] - sorted_second[i - 1]) * 1.5)
+            next_val = processed_second_sorted[i - 1] + target_diff
+            if next_val >= 9.0:
+                if max_count == 0:
+                    processed_second_sorted[i] = 9.0
+                    max_count += 1
+                else:
+                    processed_second_sorted[i] = 8.0
+            else:
+                processed_second_sorted[i] = next_val
+
+    processed_score = float(score)
+    if processed_score > 100.0:
+        processed_score = 100.0
+    elif processed_score > 10.0:
+        processed_score = min(100.0, processed_score)
+    else:
+        processed_score = processed_score * 10.0
+    processed_score = max(0.0, min(100.0, processed_score))
+
+    result_first_5 = np.zeros_like(first_5)
+    result_second_5 = np.zeros_like(second_5)
+    if len(result_first_5) > 0 and len(processed_first_sorted) > 0:
+        result_first_5[sorted_indices_first] = processed_first_sorted
+    if len(result_second_5) > 0 and len(processed_second_sorted) > 0:
+        result_second_5[sorted_indices_second] = processed_second_sorted
+
+    processed_mood = max(-1.0, min(1.0, float(mood)))
+
+    result = np.concatenate([result_first_5, result_second_5, [processed_score], [processed_mood]])
+    result[:11] = np.floor(result[:11]).astype(int)
+    result[-1] = max(-1.0, min(1.0, result[-1]))
+    return result
+
+
+def postprocess_predictions(predictions: np.ndarray, min_diff: float = 1.0) -> np.ndarray:
+    """对 batch 或单条回归向量做与训练展示一致的后处理。"""
+    if predictions.ndim == 2:
+        return np.array([_process_single_prediction(p, min_diff) for p in predictions])
+    return _process_single_prediction(predictions, min_diff)
+
+
+def _postprocess_mvqa_dict_like(
+    video_outputs: torch.Tensor, clip_outputs: Optional[torch.Tensor] = None
+) -> Tuple[Optional[torch.Tensor], torch.Tensor]:
+    """对 ``MVQA`` 输出的 video / clip 张量做后处理，返回 (clip_processed, video_processed)。"""
+    video_np = video_outputs.detach().cpu().numpy()
+    if video_np.ndim == 2 and video_np.shape[0] == 1:
+        video_np = video_np[0]
+
+    processed_video = postprocess_predictions(video_np, min_diff=1.0)
+    video_t = torch.from_numpy(np.asarray(processed_video))
+
+    if clip_outputs is None:
+        return None, video_t
+
+    clip_rows = [item for sublist in clip_outputs.detach().cpu().numpy() for item in sublist]
+    processed_clip = np.array(
+        [postprocess_predictions(np.asarray(row), min_diff=1.0) for row in clip_rows]
+    )
+    return torch.from_numpy(processed_clip), video_t
+
+
+# ==========================================
+# 核心预测函数
+# ==========================================
+def predict_video_qa(
+    video_path: str,
+    ass_path: str = "",
+    device: str = "cpu",
+    *,
+    user_id: Optional[int] = None,
+):
+    ctx_token = None
+    if user_id is not None:
+        ctx_token = MVQA_CONFIG_USER_ID.set(user_id)
+
     try:
-        # 加载 TorchScript 模型
-        model = torch.jit.load(model_path, map_location=device)
-        model.eval()
-    except Exception as e:
-        print(f"[错误] 模型加载失败: {e}")
-        return None, None
+        return _predict_video_qa_impl(video_path, ass_path, device)
+    finally:
+        if ctx_token is not None:
+            MVQA_CONFIG_USER_ID.reset(ctx_token)
 
-    # 2. 视频帧
-    print("[步骤 1] 提取视频帧...")
+
+def _predict_video_qa_impl(video_path: str, ass_path: str = "", device: str = "cpu"):
+    # 1. 初始化预处理器
+    preprocessor = MVQAPreprocessor()
+
+    # 2. 初始化模型
+    # 注意：freeze_pretrained 参数在推理时不影响权重加载，但需要结构与保存时一致
+    model = MVQA(
+        fusion_dim=Config.FUSION_DIM,
+        output_dim=Config.OUTPUT_DIM,
+        freeze_pretrained=True
+    )
+    
+    # 先创建模型，不立即移动到设备
+    # 后续加载权重后再移动
+
+    # 3. 加载模型权重
+    traced_model_path = Config.get_traced_model_path()
+    if os.path.exists(traced_model_path):
+        try:
+            # 尝试加载 state_dict (推荐方式)
+            state_dict = torch.load(traced_model_path, map_location=device, weights_only=False)
+            # 兼容处理：如果加载的是整个模型对象而非字典
+            if isinstance(state_dict, dict):
+                # 先加载权重，再移动到设备
+                model.load_state_dict(state_dict)
+                # 移动模型到设备，使用try-except处理meta tensor错误
+                try:
+                    model.to(device)
+                except RuntimeError:
+                    # 如果遇到meta tensor错误，使用to_empty()
+                    model.to_empty(device=device)
+            else:
+                # 如果 torch.load 返回的不是字典，可能已经是模型对象或 JIT 模块
+                model = state_dict
+                # 确保模型在正确的设备上
+                try:
+                    model.to(device)
+                except RuntimeError:
+                    # 如果遇到meta tensor错误，使用to_empty()
+                    model.to_empty(device=device)
+        except Exception as e:
+            try:
+                model = torch.jit.load(traced_model_path, map_location=device)
+                # 确保模型在正确的设备上
+                try:
+                    model.to(device)
+                except RuntimeError:
+                    # 如果遇到meta tensor错误，使用to_empty()
+                    model.to_empty(device=device)
+            except Exception as je:
+                return None, None
+    else:
+        # 移动随机初始化的模型到设备，使用try-except处理meta tensor错误
+        try:
+            model.to(device)
+        except RuntimeError:
+            # 如果遇到meta tensor错误，使用to_empty()
+            model.to_empty(device=device)
+
+    model.eval()
+
+    # ==========================================
+    # 数据预处理流程
+    # ==========================================
+
+    # 4. 视觉模态
     video_extractor = VideoFrameExtractor()
     frames, timestamps = video_extractor.extract_frames_with_timestamps(video_path)
-    processed_frames = preprocessor.process_frames(frames).unsqueeze(0).to(device)
+    # frames: (num_clips, T, H, W, 3) -> process_frames -> (num_clips, T, C, H, W)
+    processed_frames = preprocessor.process_frames(frames)
+    # 增加 batch 维度 -> (1, num_clips, T, C, H, W)
+    processed_frames = processed_frames.unsqueeze(0).to(device)
 
-    # 3. 音频
-    print("[步骤 2] 提取音频片段...")
-    audio_extractor = AudioSegmentWaveformExtractor()
-    waveforms, _ = audio_extractor.extract_segment_waveforms(video_path)
-    processed_audio = preprocessor.process_audio(waveforms).unsqueeze(0).to(device)
+    # 5. 音频模态
+    # 【修正3】使用修正后的 VideoAudioSegmentProcessor
+    audio_extractor = VideoAudioSegmentProcessor()
+    # process_video 现在返回原始波形 (num_clips, samples)
+    waveforms = audio_extractor.process_video(video_path)
+    # process_audio 接收波形并转换为 AST 输入格式 (num_clips, 128, 1024)
+    processed_audio = preprocessor.process_audio(waveforms)
+    # 增加 batch 维度 -> (1, num_clips, 128, 1024)
+    processed_audio = processed_audio.unsqueeze(0).to(device)
 
-    # 4. 旁白
-    print("[步骤 3] 提取旁白...")
-    aside_text = ""
+    # 6. 文本模态 - 旁白
     try:
-        aside_filter = AsideFilter(Config.SENSITIVE_WORDS)
+        # 【修正4】AsideFilter 初始化需要传入敏感词列表
+        aside_filter = AsideFilter()
+        # process_video 返回 (matches, text)，我们只需要 text
         _, aside_text = aside_filter.process_video(video_path)
-        print(f"  -> 旁白: {aside_text[:30]}...")
     except Exception as e:
-        print(f"  -> 旁白提取跳过 ({e})")
+        aside_text = ""
 
+    # process_text 返回 (1, seq_len)，已经是二维，符合模型输入 (batch, seq_len)
     aside_ids, aside_mask = preprocessor.process_text(aside_text)
     aside_ids, aside_mask = aside_ids.to(device), aside_mask.to(device)
 
-    # 5. 弹幕
-    print("[步骤 4] 处理弹幕...")
-    danmu_texts = [""] * Config.NUM_CLIPS
+    # 7. 文本模态 - 弹幕
+    num_clips = Config.get_num_clips()
+    danmu_texts = [""] * num_clips
     if os.path.exists(ass_path):
         parser = ASSParser()
         danmaku_list = parser.parse(ass_path)
-        aligner = DanmuSegmentAligner(danmaku_list)
-        danmu_texts = aligner.align_by_clips(timestamps)
+        # 【修正5】使用 FineGrainedAligner，替代 DanmuSegmentAligner
+        aligner = FineGrainedAligner(danmaku_list)
+        # align 方法接收二维 timestamps，返回 List[str] (长度为 num_clips)
+        danmu_texts = aligner.align(timestamps)
 
+    # process_text 接收字符串列表，返回
     danmu_ids, danmu_mask = preprocessor.process_text(danmu_texts)
+    # 增加 batch 维度 -> (1, num_clips, seq_len)
     danmu_ids, danmu_mask = danmu_ids.unsqueeze(0).to(device), danmu_mask.unsqueeze(0).to(device)
 
-    # 6. 推理
-    print("[步骤 5] 模型推理...")
+    # ==========================================
+    # 模型推理
+    # ==========================================
     with torch.no_grad():
-        # TorchScript 模型调用通常按位置传参
         outputs = model(
-            processed_audio, aside_ids, aside_mask,
-            danmu_ids, danmu_mask, processed_frames
+            processed_audio,
+            aside_ids,
+            aside_mask,
+            danmu_ids,
+            danmu_mask,
+            processed_frames
         )
-
-    # 兼容处理：JIT 模型输出可能是字典也可能是元组，需根据实际情况解析
-    # 假设输出为字典格式 (与 train.py 中的结构一致)
+    # 兼容 dict（eager 版 MVQA）或 tuple（部分 TorchScript 导出为 (clip_outputs, video_outputs)）
     if isinstance(outputs, dict):
-        clip_outputs = outputs['clip_outputs'].cpu().numpy()[0]
-        video_outputs = outputs['video_outputs'].cpu().numpy()[0]
-    elif isinstance(outputs, tuple):
-        # 如果是元组，假设顺序为 (clip_outputs, video_outputs) 或类似，需根据实际模型结构调整
-        # 通常 traced model 如果返回 dict，在 C++ 环境下可能表现为 tuple 或需特殊处理
-        # 这里假设 PyTorch JIT 保留了字典返回
-        clip_outputs = outputs[0].cpu().numpy()[0]
-        video_outputs = outputs[1].cpu().numpy()[0]
-    else:
-        # 无法解析
-        clip_outputs, video_outputs = None, None
+        clip_t = outputs.get("clip_outputs")
+        return _postprocess_mvqa_dict_like(outputs["video_outputs"], clip_t)
 
-    print("\n" + "=" * 30)
-    print("预测完成!")
-    print(f"视频级预测: {video_outputs}")
-    print(f"片段级预测: {clip_outputs}")
-    print("=" * 30)
+    if isinstance(outputs, tuple) and len(outputs) == 2:
+        a, b = outputs[0], outputs[1]
+        if isinstance(a, torch.Tensor) and isinstance(b, torch.Tensor):
+            # 视频级 (B,12) 与片段级 (B,T,12) 可区分；否则默认 (clip, video) 与常见导出一致
+            if a.ndim == 2 and b.ndim == 3 and a.shape[-1] == 12 and b.shape[-1] == 12:
+                return _postprocess_mvqa_dict_like(a, b)
+            if b.ndim == 2 and a.ndim == 3 and a.shape[-1] == 12 and b.shape[-1] == 12:
+                return _postprocess_mvqa_dict_like(b, a)
+            return _postprocess_mvqa_dict_like(b, a)
 
-    return clip_outputs, video_outputs
+    return None, None
 
-
-# ==========================================
-# 4. 主程序入口
-# ==========================================
-if __name__ == "__main__":
-    # 配置设备
-    DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print(f"使用设备: {DEVICE}")
-
-    # 扫描 lab 目录
-    LAB_DIR = "./dataset"
-    if not os.path.exists(LAB_DIR):
-        print(f"错误: 目录不存在 {LAB_DIR}")
-    else:
-        found_video = False
-        for file in os.listdir(LAB_DIR):
-            if file.endswith('.mp4'):
-                found_video = True
-                video_file = os.path.join(LAB_DIR, file)
-                base_name = os.path.splitext(file)[0]
-                ass_file = os.path.join(LAB_DIR, base_name + '.ass')
-
-                predict_video_qa(
-                    video_path=video_file,
-                    ass_path=ass_file if os.path.exists(ass_file) else "",
-                    device=DEVICE
-                )
-
-        if not found_video:
-            print(f"在 {LAB_DIR} 中未找到 .mp4 文件。")

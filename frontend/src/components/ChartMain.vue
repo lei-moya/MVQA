@@ -102,34 +102,57 @@ const throttle = (func, delay) => {
 };
 
 // 初始化图表
+let initRetryCount = 0;
+const maxRetries = 10;
+
 const initCharts = () => {
   if (!lineChartRef.value) return;
-  
-  // 如果图表已存在，先销毁
-  if (lineChart) {
-    lineChart.dispose();
-  }
-  
-  lineChart = echarts.init(lineChartRef.value);
-  updateChartData();
-  
+
   const chartDom = lineChartRef.value;
-  
-  // 移除之前的事件监听器
+
+  const rect = chartDom.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) {
+    initRetryCount++;
+    if (initRetryCount < maxRetries) {
+      setTimeout(initCharts, 200);
+    }
+    return;
+  }
+
+  initRetryCount = 0;
+
   Object.entries(eventListeners).forEach(([event, listener]) => {
     if (listener) {
       chartDom.removeEventListener(event, listener);
+      eventListeners[event] = null;
     }
   });
-  
-  // 添加鼠标事件监听
+
+  if (lineChart) {
+    lineChart.dispose();
+    lineChart = null;
+  }
+
+  try {
+    lineChart = echarts.init(chartDom);
+    updateChartData();
+  } catch (error) {
+    console.error('初始化图表失败:', error);
+    if (initRetryCount < maxRetries) {
+      initRetryCount++;
+      setTimeout(initCharts, 200);
+    }
+    return;
+  }
+
   eventListeners.mouseenter = () => emit('mouse-enter');
   eventListeners.mouseleave = () => emit('mouse-leave');
   eventListeners.mousemove = throttle((event) => {
-    const rect = chartDom.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-    
+    if (!lineChart) return;
+    const r = chartDom.getBoundingClientRect();
+    const x = event.clientX - r.left;
+    const y = event.clientY - r.top;
+
     const pointInGrid = lineChart.convertFromPixel('grid', [x, y]);
     if (pointInGrid && pointInGrid[0] !== undefined) {
       const dataIndex = Math.round(pointInGrid[0]);
@@ -139,10 +162,11 @@ const initCharts = () => {
     }
   }, 50);
   eventListeners.click = (event) => {
-    const rect = chartDom.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-    
+    if (!lineChart) return;
+    const r = chartDom.getBoundingClientRect();
+    const x = event.clientX - r.left;
+    const y = event.clientY - r.top;
+
     const pointInGrid = lineChart.convertFromPixel('grid', [x, y]);
     if (pointInGrid && pointInGrid[0] !== undefined) {
       const dataIndex = Math.round(pointInGrid[0]);
@@ -151,9 +175,11 @@ const initCharts = () => {
       }
     }
   };
-  
+
   Object.entries(eventListeners).forEach(([event, listener]) => {
-    chartDom.addEventListener(event, listener);
+    if (listener) {
+      chartDom.addEventListener(event, listener);
+    }
   });
 };
 
@@ -170,7 +196,8 @@ const updateChartData = () => {
       textStyle: {color: '#fff'},
       padding: 10,
       formatter: function(params) {
-        return `时间: ${params[0].name}<br/>评分: ${params[0].value.toFixed(2)}`;
+        const value = Number(params[0].value) || 0;
+        return `时间: ${params[0].name}<br/>评分: ${value.toFixed(2)}`;
       }
     },
     animationDurationUpdate: 300,
@@ -367,7 +394,7 @@ const releaseTrack = (trackIndex) => {
 
 // 节流处理时间更新事件
 const handleTimeUpdate = throttle(() => {
-  if (!videoPlayerRef.value || !showDanmu.value || danmuData.value.length === 0) return;
+  if (!videoPlayerRef.value || !showDanmu.value || danmuData.value.length === 0 || videoPlayerRef.value.paused) return;
   
   const currentTime = videoPlayerRef.value.currentTime;
   const videoWidth = videoPlayerRef.value.offsetWidth || 800;
@@ -419,11 +446,15 @@ const handleTimeUpdate = throttle(() => {
 }, 100);
 
 onMounted(() => {
-  initCharts();
   initDanmuTracks();
   updateVideoSrc();
   loadDanmu();
   window.addEventListener('resize', handleResize);
+  
+  // 延迟初始化图表，确保DOM元素已经渲染完成
+  setTimeout(() => {
+    initCharts();
+  }, 500);
 });
 
 onBeforeUnmount(() => {
@@ -508,9 +539,9 @@ defineExpose({
   max-height: 400px;
   aspect-ratio: 16 / 9;
   background: #000;
-  border-radius: 8px;
+  border-radius: 10px;
   overflow: hidden;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.1), 0 8px 24px rgba(15, 23, 42, 0.12);
 }
 
 .video-player {
@@ -598,7 +629,7 @@ defineExpose({
 
 .chart-container {
   width: 100%;
-  height: 100%;
+  height: 305px;
   min-height: 305px;
 }
 

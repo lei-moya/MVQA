@@ -1,42 +1,65 @@
-# Virtual environment
+# Python 虚拟环境
 .venv/
+venv/
 env/
 
-# IDE files
+# IDE
 .idea/
 .vscode/
 
-# Python files
+# Python 缓存与扩展模块
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
 
-# Database files
+# SQLite（backend/database.py：项目根目录 video_rating.db；WAL 模式产生 -wal/-shm）
 *.db
+*.db-wal
+*.db-shm
 *.sqlite
 
-# Log files
+# 日志
 *.log
+logs/
 
-# OS files
+# 操作系统
 .DS_Store
 Thumbs.db
 
-# Build files
+# 构建产物（前端 Vite 输出在 frontend/dist，此处规则亦会匹配）
 dist/
 build/
 
-# Environment variables
+# 密钥与证书
+*.pem
+*.key
+id_rsa
+id_rsa.pub
+/key
+/key.pub
+
+# 环境变量（backend/settings.py 等）
 .env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
 
-# Model files (large files)
-models/
+# 上传与静态资源目录（backend/main.py：UPLOAD_DIR）
+backend/uploads/
 
-# Uploads directory
-uploads/
+# Docker worker 数据卷挂载目录（docker-compose.yml：./videos:/tmp/videos）
+/videos/
 
-# Temporary files
+# 音频管线临时文件（backend/utils/audio_utils.py：temp_audio.wav）
+temp_audio.wav
+
+# 历史/通用临时文件前缀
 temp_*
+
+# 本地大体积测试媒体（非必须入库）
+test_video/
+
+# Whisper medium 主权重约 2.9GiB，超过 GitHub LFS 单文件 2GiB 上限，勿提交；见 README 从 Hugging Face 拉取
+backend/model/whisper-medium/model.safetensors

@@ -10,13 +10,25 @@
       <FileUpload @upload="handleUpload" />
     </el-card>
     <div class="file-list-container">
-      <FileList :files="files" :current-video-id="currentVideoId" @view="handleView" @delete="handleDelete" />
+      <FileList
+        :files="files"
+        :current-video-id="currentVideoId"
+        :total-count="totalCount"
+        :loading-more="loadingMore"
+        :has-more="hasMore"
+        :filter-status="filterStatus"
+        :filter-filename="filterFilename"
+        @view="handleView"
+        @delete="handleDelete"
+        @reanalyze="handleReanalyze"
+        @load-more="handleLoadMore"
+        @filters-change="handleFiltersChange"
+      />
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref } from 'vue';
 import FileUpload from './FileUpload.vue';
 import FileList from './FileList.vue';
 
@@ -24,11 +36,31 @@ const props = defineProps({
   files: Array,
   currentVideoId: {
     type: Number,
-    default: null
-  }
+    default: null,
+  },
+  totalCount: {
+    type: Number,
+    default: 0,
+  },
+  loadingMore: {
+    type: Boolean,
+    default: false,
+  },
+  hasMore: {
+    type: Boolean,
+    default: false,
+  },
+  filterStatus: {
+    type: String,
+    default: '',
+  },
+  filterFilename: {
+    type: String,
+    default: '',
+  },
 });
 
-const emit = defineEmits(['upload', 'view', 'delete']);
+const emit = defineEmits(['upload', 'view', 'delete', 'reanalyze', 'load-more', 'filters-change']);
 
 const handleUpload = (filesData) => {
   emit('upload', filesData);
@@ -40,6 +72,18 @@ const handleView = (video) => {
 
 const handleDelete = (videoId) => {
   emit('delete', videoId);
+};
+
+const handleLoadMore = () => {
+  emit('load-more');
+};
+
+const handleReanalyze = (videoId) => {
+  emit('reanalyze', videoId);
+};
+
+const handleFiltersChange = (payload) => {
+  emit('filters-change', payload);
 };
 </script>
 
@@ -61,8 +105,7 @@ const handleDelete = (videoId) => {
 }
 
 .control-card:hover {
-  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-  transform: translateY(-2px);
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.09);
 }
 
 /* 上传卡片 */
@@ -80,8 +123,7 @@ const handleDelete = (videoId) => {
 }
 
 .file-list-container:hover {
-  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-  transform: translateY(-2px);
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.09);
 }
 
 /* 卡片头部 */
@@ -118,8 +160,8 @@ const handleDelete = (videoId) => {
 }
 
 .file-count-badge:hover {
-  transform: scale(1.1);
-  box-shadow: 0 4px 6px rgba(59, 130, 246, 0.4);
+  filter: brightness(1.06);
+  box-shadow: 0 4px 6px rgba(59, 130, 246, 0.38);
 }
 
 /* 确保FileList组件占满容器高度 */

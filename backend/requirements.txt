@@ -1,17 +1,35 @@
+# Python 3.9+（与当前运行环境及 Docker 基础镜像一致；torch/transformers 等 requires_python 含 3.9）
+
+# --- Web（main.py、schemas.py）---
 fastapi==0.104.1
 uvicorn==0.23.2
-sqlalchemy==2.0.23
 python-multipart==0.0.6
-opencv-python-headless==4.8.1.78
-numpy==1.24.4
+
+# --- 数据与校验（database.py、models.py、schemas.py）---
+sqlalchemy==2.0.23
 pydantic==2.5.2
-pydantic-settings==2.1.0
-aiosqlite==0.19.0
-torch==2.1.2
-transformers==4.35.2
-moviepy==1.0.3
-pyjwt==2.8.0
+email-validator==2.3.0
+
+# --- 认证与 HTTP（main.py、bilidown.py、bililogin.py）---
+PyJWT==2.8.0
 requests==2.31.0
+
+# --- 数值与深度学习（services.py、mvqa_analyzer.py、model/）---
+numpy==1.26.4
+torch==2.8.0
+torchaudio==2.8.0
+transformers==4.57.6
+
+# --- 视觉 / 音视频管线（video_utils、text_utils、audio_utils、moviepy）---
+opencv-python-headless==4.8.1.78
+librosa==0.11.0
+soundfile==0.13.1
+moviepy==2.2.1
+pillow==11.3.0
+
+# --- B 站下载与登录（bilidown.py、bililogin.py）---
+qrcode==8.2
 tqdm==4.66.1
-email-validator
-qrcode
+
+# --- 可选：S3 预签名 URL（storage.py，未装则仅本地路径）---
+boto3==1.42.91

@@ -1,0 +1,19 @@
+# Git LFS：backend/model 下模型权重与大二进制（与 backend/config.py 中 model_paths 一致）
+# 未列出的扩展名（如 .json、.txt、.md）仍由普通 Git 跟踪，便于 diff。
+
+backend/model/**/*.pt filter=lfs diff=lfs merge=lfs -text
+backend/model/**/*.pth filter=lfs diff=lfs merge=lfs -text
+backend/model/**/*.bin filter=lfs diff=lfs merge=lfs -text
+backend/model/**/*.safetensors filter=lfs diff=lfs merge=lfs -text
+backend/model/**/*.ckpt filter=lfs diff=lfs merge=lfs -text
+backend/model/**/*.onnx filter=lfs diff=lfs merge=lfs -text
+backend/model/**/*.pkl filter=lfs diff=lfs merge=lfs -text
+backend/model/**/*.pickle filter=lfs diff=lfs merge=lfs -text
+backend/model/**/*.h5 filter=lfs diff=lfs merge=lfs -text
+backend/model/**/*.gguf filter=lfs diff=lfs merge=lfs -text
+backend/model/**/*.joblib filter=lfs diff=lfs merge=lfs -text
+backend/model/**/*.npy filter=lfs diff=lfs merge=lfs -text
+backend/model/**/*.npz filter=lfs diff=lfs merge=lfs -text
+
+# 覆盖上一行通配：该文件 >2GiB，GitHub LFS 拒绝；由协作者本地下载（须置于本路径）
+backend/model/whisper-medium/model.safetensors !filter !diff !merge

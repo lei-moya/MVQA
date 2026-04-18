@@ -112,56 +112,33 @@ def login():
     client = BiliClient()
 
     # 1. 获取二维码信息
-    print("正在获取登录二维码...")
     qr_info = client.get_qr_info()
     qr_url = qr_info["url"]
     qr_key = qr_info["qrcode_key"]
 
     # 2. 生成并显示二维码
     img_base64 = generate_qr_code(qr_url)
-    print("请使用B站App扫描以下二维码登录：")
-    print(img_base64)
-    print("或者直接访问以下链接：")
-    print(qr_url)
 
     # 3. 轮询二维码状态
-    print("\n等待扫码...")
     while True:
         time.sleep(2)  # 每2秒检查一次
         qr_status, sessdata = client.get_qr_status(qr_key)
 
-        if qr_status["code"] == 86101:
-            print("请扫描二维码...")
-        elif qr_status["code"] == 86090:
-            print("请在App中确认登录...")
-        elif qr_status["code"] == 86038:
-            print("二维码已过期，请重新获取...")
+        if qr_status["code"] == 86038:
+            # 二维码已过期
             return None
         elif qr_status["code"] == 0:
-            print("登录成功！")
+            # 登录成功
             return sessdata
-        else:
-            print(f"未知状态码：{qr_status['code']}，消息：{qr_status['message']}")
 
 
 def main():
     """主函数"""
-    print("B站登录脚本")
-    print("=" * 50)
-
     sessdata = login()
     if sessdata:
-        print(f"\n登录成功，SESSDATA：{sessdata}")
-        print("请保存此SESSDATA用于后续操作")
-
         # 验证登录状态
         client = BiliClient(sessdata)
-        if client.check_login():
-            print("登录状态验证成功！")
-        else:
-            print("登录状态验证失败！")
-    else:
-        print("登录失败")
+        client.check_login()
 
 
 if __name__ == "__main__":

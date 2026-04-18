@@ -181,7 +181,7 @@ const activeIndex = computed(() => {
 });
 
 const handleSelect = (key, keyPath) => {
-  console.log(key, keyPath);
+  // 处理菜单选择
 };
 
 const handleLogout = async () => {
@@ -239,9 +239,26 @@ header {
   gap: 20px;
 }
 
+.left-section :deep(h1) {
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: #0f172a;
+  letter-spacing: -0.02em;
+}
+
+.left-section :deep(h1 i) {
+  color: #2563eb;
+}
+
 .badge {
-  font-size: 0.9rem;
-  color: #666;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: #475569;
+  background: rgba(37, 99, 235, 0.08);
+  border: 1px solid rgba(37, 99, 235, 0.14);
+  padding: 4px 10px;
+  border-radius: 999px;
+  letter-spacing: 0.02em;
 }
 
 .center-section {
@@ -263,6 +280,7 @@ header {
 .username {
   font-size: 14px;
   font-weight: 500;
+  color: #334155;
 }
 
 .avatar {
@@ -278,7 +296,7 @@ header {
 }
 
 .avatar:hover {
-  color: #3b82f6;
+  color: #2563eb;
 }
 
 :deep(.el-menu) {
@@ -286,10 +304,17 @@ header {
 }
 
 :deep(.el-menu-item) {
-  font-size: 17px;
-  padding: 0 20px;
+  font-size: 16px;
+  font-weight: 500;
+  padding: 0 18px;
   height: 60px;
   line-height: 60px;
+  color: #334155;
+}
+
+:deep(.el-menu-item.is-active) {
+  color: #2563eb !important;
+  border-bottom-color: #2563eb !important;
 }
 
 :deep(.el-menu-item i) {

@@ -107,6 +107,10 @@ onBeforeUnmount(() => {
 watch(() => props.data, () => {
   initRadar();
 });
+
+watch(() => props.legendData, () => {
+  // legendData 变化时不需要重新初始化雷达图，Vue 会自动更新 DOM
+});
 </script>
 
 <style scoped>
@@ -118,8 +122,7 @@ watch(() => props.data, () => {
 }
 
 .widget-card:hover {
-  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-  transform: translateY(-2px);
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.09);
 }
 
 .card-header {

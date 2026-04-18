@@ -1,7 +1,9 @@
 import sqlite3
+from pathlib import Path
 
-# 连接到SQLite数据库
-conn = sqlite3.connect('video_rating.db')
+# 与 database.py 一致：项目根目录下的 video_rating.db
+_db_path = Path(__file__).resolve().parent.parent / "video_rating.db"
+conn = sqlite3.connect(str(_db_path))
 cursor = conn.cursor()
 
 # 检查sensitive_words表是否存在
@@ -11,28 +13,16 @@ try:
     table_exists = cursor.fetchone()
     
     if table_exists:
-        print("sensitive_words表存在")
-        
         # 检查表中的数据
         cursor.execute("SELECT * FROM sensitive_words;")
         words = cursor.fetchall()
-        
-        if words:
-            print(f"找到{len(words)}个敏感词:")
-            for word in words:
-                print(f"- {word[1]}")
-        else:
-            print("sensitive_words表为空")
     else:
-        print("sensitive_words表不存在")
+        words = []
         
         # 检查所有表
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
         tables = cursor.fetchall()
-        print("数据库中的表:")
-        for table in tables:
-            print(f"- {table[0]}")
-            
+        
 except Exception as e:
     print(f"错误: {e}")
 finally:
