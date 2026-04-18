@@ -52,45 +52,75 @@
 
 ---
 
+## 已上传文件与任务列表
+
+上传与解析后的视频由**服务端落盘 + 数据库元数据**共同描述；前端首页右侧 **「数据源控制」** 内，**上半部为上传入口**（B 站 URL、本地上传/批量），**下半部为「已上传视频」列表**（筛选、分页、行内操作）。下方 **页面预览** 中二者对应 **两张独立截图**，便于分开展示。
+
+| 项目 | 说明 |
+|------|------|
+| **物理存储** | 媒体与缩略图等默认保存在 **`backend/uploads/`**（`backend/main.py` 中 `UPLOAD_DIR`），HTTP 静态路径 **`/uploads`** |
+| **元数据** | 任务记录存于项目根目录 **`video_rating.db`**（SQLite），与 **用户账号** 绑定；含状态、路径、分数、缩略图路径等 |
+| **上传方式** | 单组文件（视频 + 可选 ass/xml 弹幕，单组合计上限见帮助页）、**批量仅视频**、**B 站 URL** 解析后落盘；进度条仅表示到服务器的传输，分析进度以列表 **状态** 为准 |
+| **列表行为** | 默认按 **上传时间降序**；支持 **状态下拉 + 文件名关键词** 搜索；触底加载更多（默认每页 30 条）；行内可含 **缩略图**、相对历史分数的 **涨幅** 展示 |
+| **任务状态** | `pending` / `downloaded` / `processing` / `completed` / `failed`（与 `GET /api/videos` 一致） |
+| **删除与重分析** | 删除会移除记录并清理关联上传文件（以服务端实现为准）；**重分析** 对已完成或失败且文件仍可读的任务再次入队 |
+| **播放与图表** | 选中任务后，左侧大屏通过 **`/api/videos/{id}/stream`** 等拉流；**折线图** 为片段级得分趋势，**两组雷达** 分别概括视频维与音频维质量（与下节配图一一对应） |
+
+更细的交互与限额见上文 **「帮助中心」** 一节（`Help.vue` 中「功能说明」「使用指南」等标签）。
+
+---
+
 ## 页面预览（预留配图位）
 
-以下为推荐截图文件名与说明，**将 PNG / WebP 放入 `docs/images/`** 后即可在 README 中正常显示。
+以下为推荐截图文件名与说明，**将 PNG / WebP 放入 `docs/images/`** 后即可在 README 中正常显示。**数据图表（折线）**、**质量维度（雷达）**、**上传区** 与 **已上传视频列表** 均为独立配图；若你曾使用旧文件名，请按下列名称整理或自行改回 README 中的路径。
 
 <p align="center">
-  <b>总览 / 首页</b><br/>
+  <b>① 总览 / 首页</b><br/>
   <img src="docs/images/01-home.png" alt="首页" width="85%" />
 </p>
-<p align="center"><sub>文件：<code>docs/images/01-home.png</code></sub></p>
+<p align="center"><sub><code>docs/images/01-home.png</code> — 左播放器与折线、中数据块与雷达、右侧数据源控制（上传 + 列表）的整体布局；上传与列表的局部特写见 ④、⑤</sub></p>
 
 <p align="center">
-  <b>数据图表 / 质量维度</b><br/>
-  <img src="docs/images/02-charts.png" alt="图表" width="85%" />
+  <b>② 数据图表（片段级折线）</b><br/>
+  <img src="docs/images/02-chart-timeline.png" alt="数据图表折线" width="85%" />
 </p>
-<p align="center"><sub>文件：<code>docs/images/02-charts.png</code></sub></p>
+<p align="center"><sub><code>docs/images/02-chart-timeline.png</code> — 建议截取左侧或占屏较大的 <strong>ECharts 折线图</strong>（片段得分随时间/片段索引变化，可含与折线联动的播放进度）</sub></p>
 
 <p align="center">
-  <b>上传与任务列表</b><br/>
-  <img src="docs/images/03-upload-list.png" alt="上传与列表" width="85%" />
+  <b>③ 质量维度（雷达图）</b><br/>
+  <img src="docs/images/03-radar-dimensions.png" alt="质量维度雷达" width="85%" />
 </p>
-<p align="center"><sub>文件：<code>docs/images/03-upload-list.png</code></sub></p>
+<p align="center"><sub><code>docs/images/03-radar-dimensions.png</code> — 建议截取中部 <strong>两组雷达</strong>：视频维（清晰、色彩、饱和度等）与音频维（音量、音质等），与折线区分展示</sub></p>
 
 <p align="center">
-  <b>设置与模型/处理参数</b><br/>
-  <img src="docs/images/04-settings.png" alt="设置" width="85%" />
+  <b>④ 上传区（URL / 本地上传）</b><br/>
+  <img src="docs/images/04-upload-panel.png" alt="上传区" width="85%" />
 </p>
-<p align="center"><sub>文件：<code>docs/images/04-settings.png</code></sub></p>
+<p align="center"><sub><code>docs/images/04-upload-panel.png</code> — 仅截取右侧「数据源控制」<strong>上半部分</strong>：视频 URL、文件选择、批量上传、开始上传与进度条等，<strong>不含</strong>下方列表</sub></p>
 
 <p align="center">
-  <b>登录 / B 站相关流程（若有独立页）</b><br/>
-  <img src="docs/images/05-login.png" alt="登录" width="85%" />
+  <b>⑤ 已上传视频列表</b><br/>
+  <img src="docs/images/05-video-list.png" alt="已上传视频列表" width="85%" />
 </p>
-<p align="center"><sub>文件：<code>docs/images/05-login.png</code></sub></p>
+<p align="center"><sub><code>docs/images/05-video-list.png</code> — 仅截取同侧 <strong>「已上传视频」列表区域</strong>：状态筛选、关键词搜索、滚动列表（缩略图、状态标签、查看/删除/重分析等），可与 ④ 同一视口裁切为上下两张</sub></p>
 
 <p align="center">
-  <b>帮助中心（/help）</b><br/>
-  <img src="docs/images/06-help.png" alt="帮助中心" width="85%" />
+  <b>⑥ 设置与模型/处理参数</b><br/>
+  <img src="docs/images/06-settings.png" alt="设置" width="85%" />
 </p>
-<p align="center"><sub>文件：<code>docs/images/06-help.png</code></sub></p>
+<p align="center"><sub>文件：<code>docs/images/06-settings.png</code></sub></p>
+
+<p align="center">
+  <b>⑦ 登录 / B 站扫码</b><br/>
+  <img src="docs/images/07-login.png" alt="登录" width="85%" />
+</p>
+<p align="center"><sub>文件：<code>docs/images/07-login.png</code></sub></p>
+
+<p align="center">
+  <b>⑧ 帮助中心（/help）</b><br/>
+  <img src="docs/images/08-help.png" alt="帮助中心" width="85%" />
+</p>
+<p align="center"><sub>文件：<code>docs/images/08-help.png</code></sub></p>
 
 ---
 
@@ -203,19 +233,22 @@ SQLite 默认在容器内 ` /app/video_rating.db`；若需持久化，见 `docke
 │   ├── model/         # 权重与网络定义（部分为 LFS）
 │   └── utils/         # 音视频、弹幕、敏感词等
 ├── frontend/          # Vue 3 前端
-├── docs/images/       # README 配图（按需添加）
+├── docs/
+│   ├── images/        # README 配图
+│   ├── 基于多模态融合的短视频质量评价系统的设计与实现.pdf
+│   ├── 多模态视频质量评价系统研究.pptx
+│   └── 测试方案.md
 ├── docker-compose.yml
-├── README.md
-├── 基于多模态融合的短视频质量评价系统的设计与实现.pdf
-└── 多模态视频质量评价系统研究.pptx
+└── README.md
 ```
 
 ---
 
 ## 设计文档
 
-- [《基于多模态融合的短视频质量评价系统的设计与实现》（PDF）](./基于多模态融合的短视频质量评价系统的设计与实现.pdf)
-- [《多模态视频质量评价系统研究》（PPTX）](./多模态视频质量评价系统研究.pptx)
+- [《基于多模态融合的短视频质量评价系统的设计与实现》（PDF）](./docs/基于多模态融合的短视频质量评价系统的设计与实现.pdf)
+- [《多模态视频质量评价系统研究》（PPTX）](./docs/多模态视频质量评价系统研究.pptx)
+- [《测试方案》](./docs/测试方案.md)
 
 ---
 
