@@ -24,26 +24,31 @@
 | **任务调度** | FastAPI `BackgroundTasks` 异步分析（`job_queue`），无需 Redis/Celery |
 | **认证与权限** | B 站扫码相关流程、JWT、管理员 mid 与环境变量合并（`settings` · `admin_mids_store`） |
 | **配置与合规** | 用户级 `Setting`、敏感词 DFA/规则（`utils/sensitive_rules`）、可选 S3 流式重定向（`storage`） |
-| **前端体验** | Vue 3 + Vite + Element Plus + ECharts，开发时代理 `/api` 与 `/uploads` |
-| **帮助中心** | 内置 `/help` 多标签文档（产品介绍、操作说明、FAQ、部署、术语等），见下节 |
+| **前端体验** | Vue 3 + Vite + Element Plus + ECharts；**帮助中心**（路由 `/help`）内置产品与操作说明，开发时代理 `/api` 与 `/uploads` |
 
 ---
 
 ## 帮助中心
 
-前端提供独立 **帮助页**，路由为 **`/help`**（实现见 [`frontend/src/components/Help.vue`](frontend/src/components/Help.vue)）。**无需登录**即可打开；顶栏菜单「帮助」进入。设置页 `/settings` 仍受登录守卫保护。
+完整交互说明在前端 **帮助中心** 页面实现，源码为 [`frontend/src/components/Help.vue`](frontend/src/components/Help.vue)，路由 **`/help`**，顶栏菜单「帮助」进入。**可不登录浏览**（设置、敏感词审批等仍以实际登录与权限为准）。
 
-| 标签 | 内容概要 |
+| 场景 | 访问示例 |
 |------|----------|
-| **项目介绍** | 产品定位、技术栈摘要、适用场景与使用边界（模型主观性、浏览器播放与分析差异、S3 与本地分析等） |
-| **功能说明** | 首页布局、登录与导航、上传/批量/B 站 URL 规则与限额、任务状态含义、列表筛选与分页、大屏折线/雷达/弹幕/流媒体、`/api/health` 等 |
-| **使用指南** | 首次使用推荐步骤、JWT 与 401、上传与列表操作、查看结果与重分析、设置与敏感词权限说明 |
-| **常见问题** | 处理耗时、失败排查、格式与黑屏、弹幕、筛选与管理员 mid、`JWT_SECRET`、B 站 URL、代理与 `VITE_*` 等 |
-| **术语与提示** | mid、JWT、BackgroundTasks、预签名 URL、片段（clip）；调试与隐私/数据落盘提示 |
-| **部署与环境** | Python/Node 建议版本、本地 `uvicorn` + `npm run dev`、生产构建与反代、环境变量摘要、`video_rating.db` / `backend/uploads`、启动检查清单 |
-| **技术支持** | 自助排查步骤与联系方式占位（可在该 Vue 文件中替换为课题组建群、邮箱或 Issue 链接） |
+| Vite 开发 | `http://127.0.0.1:5173/help`（端口以 `npm run dev` 终端输出为准） |
+| Docker Compose（Nginx） | `http://localhost/help` |
 
-开发或交付时，**以应用内帮助页为准**；README 仅作入口说明。更新文案时直接改 `Help.vue` 即可。
+页面为 **Element Plus 标签页**，共 **6 组**内容与线上一致：
+
+| 标签 | 主要内容 |
+|------|----------|
+| **项目介绍** | 产品定位、技术栈摘要、适用场景、使用边界与首次部署提示 |
+| **功能说明** | 首页/登录/设置/帮助导航；单组与批量上传、B 站 URL、任务状态（pending / downloaded / processing / completed / failed）；列表筛选与无限滚动；大屏折线/雷达/弹幕/流媒体；设置项与管理员 UID；`GET /api/health` 等 |
+| **使用指南** | 推荐首次使用顺序；JWT 与路由重定向；上传与列表操作；结果解读；删除与重分析；敏感词与配置注意 |
+| **常见问题** | 分析耗时与失败、格式与播放、弹幕、筛选与登录异常、管理员身份、B 站 URL 与网络、敏感词策略、评分含义等 FAQ |
+| **术语与提示** | mid、JWT、BackgroundTasks、预签名 URL、片段等名词；调试建议；隐私与数据落盘说明 |
+| **部署与环境** | Python/Node/硬件经验值、本地与生产构建、环境变量摘要、SQLite 与 uploads 路径、启动检查清单（与下文 README 互补） |
+
+> **版本与路径以本仓库为准**：帮助页中个别「建议版本」若与根目录 **README** 或 **`backend/requirements.txt`**（当前为 Python **3.9+**）不一致时，以仓库文件与 `backend/database.py` 中数据库路径说明为准。
 
 ---
 
